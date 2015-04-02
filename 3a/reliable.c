@@ -25,6 +25,10 @@ struct reliable_state {
 
   /* Add your own data fields below this */
 
+  /* Client */
+
+  /* Server */
+
 };
 rel_t *rel_list;
 
@@ -75,6 +79,8 @@ rel_destroy (rel_t *r)
   conn_destroy (r->c);
 
   /* Free any other allocated memory here */
+
+  free(r);
 }
 
 

@@ -29,6 +29,10 @@
 #define MAX_PAYLOAD_SIZE 500
 #define HEADER_SIZE 12
 
+typedef struct packetWrapper {
+  packet_t *packet;
+} wrapper;
+
 struct reliable_state {
   rel_t *next;			/* Linked list for traversing all connections */
   rel_t **prev;
@@ -37,25 +41,20 @@ struct reliable_state {
 
   /* Add your own data fields below this */
 
+  int windowSize;
+  int sentListSize, recvListSize;
+  wrapper **sentPackets, **recvPackets;
   // Save retransmission timeout from config_common
   int timeout;
 
   /* Client */
-
   int client_state;
 
-
-
   /* Server */
-
   int server_state;
 
 };
 rel_t *rel_list;
-
-
-
-
 
 /* Creates a new reliable protocol session, returns NULL on failure.
  * Exactly one of c and ss should be NULL.  (ss is NULL when called
@@ -86,7 +85,22 @@ rel_create (conn_t *c, const struct sockaddr_storage *ss,
   rel_list = r;
 
   /* Do any other initialization you need here */
+  r->windowSize = cc->window;
+  r->timeout = cc->timeout;
 
+  r->sentListSize = 0;
+  r->recvListSize = 0;
+
+  r->sentPackets = malloc(sizeof(wrapper *) * r->windowSize);
+  r->recvPackets = malloc(sizeof(wrapper *) * r->windowSize);
+
+  int i;
+  for (i = 0; i < r->windowSize; i++) {
+    r->sentPackets[i] = malloc(sizeof(wrapper *));
+    r->sentPackets[i]->packet = malloc(sizeof(packet_t));
+    r->recvPackets[i] = malloc(sizeof(wrapper));
+    r->recvPackets[i]->packet = malloc(sizeof(packet_t));
+  }
 
   return r;
 }
@@ -101,6 +115,15 @@ rel_destroy (rel_t *r)
 
   /* Free any other allocated memory here */
 
+  int i;
+  for (i = 0; i < r->windowSize; i++) {
+    free(r->sentPackets[i]->packet);
+    free(r->sentPackets[i]);
+    free(r->recvPackets[i]->packet);
+    free(r->recvPackets[i]);
+  }
+  free(r->sentPackets);
+  free(r->recvPackets);
   free(r);
 }
 
@@ -125,45 +148,57 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
   // Just proof of concept I should really be doing this in rel_output,
   // but I'm not sure how to connect it yet
-  printf("Received packet\n");
-  printf("Packet contents: %s\n", pkt->data);
+  printf("Received packet: %s\n", pkt->data);
   /* I think what should be happening is that there are send and receive buffers
      and recvpkt puts whatever is received on the buffer if there is space
      and then sends an ack back and rel_output is actually what does the outputting */
+
+  // push packet to buffer if possible
+
+  // send ack back to sender
+  // struct ack_packet ackPacket;
+  // ackPacket.cksum = 0;
+  // ackPacket.len = 0;
+  // ackPacket.ackno = 0;
 }
 
 void
 rel_read (rel_t *s)
 {
-  char payloadBuffer[MAX_PAYLOAD_SIZE];
-  // conn_input stores data in payloadBuffer
-  int bytesReceived = conn_input(s->c, payloadBuffer, MAX_PAYLOAD_SIZE);
+  // send data using conn_sendpkt
+  packet_t *packet;
+  packet = malloc(sizeof(*packet));
 
+  int bytesReceived = conn_input(s->c, packet->data, MAX_PAYLOAD_SIZE);
+  // Trim leftover new line character
+  strtok(packet->data, "\n");
   if (bytesReceived == 0) {
+    free(packet);
     return; // no data is available at the moment, just return
   }
   else if (bytesReceived == -1) {
+    packet->len = HEADER_SIZE;
+    free(packet);
     return; // EOF was received, need to add more to this later
   }
 
-  // CAUTION: payloadBuffer has new line character at the end, will probably need to trim it off later
-  printf("Message: %s\n", payloadBuffer);
-  // now send data using conn_sendpkt
-  packet_t packet;
-  packet.cksum = 0;
-  // Will need to change len and 3rd input of conn_sendpkt later to more efficiently use buffer space
-  packet.len = HEADER_SIZE + MAX_PAYLOAD_SIZE;
-  packet.ackno = 1;
-  packet.seqno = 1;
-  memcpy(packet.data, payloadBuffer, MAX_PAYLOAD_SIZE);
-  printf("Verify data is the same: %s\n", packet.data);
-  conn_sendpkt(s->c, &packet, HEADER_SIZE + MAX_PAYLOAD_SIZE);
+  packet->cksum = 0;
+  
+  packet->len = HEADER_SIZE + bytesReceived;
+  packet->ackno = 1;
+  packet->seqno = 1;
+  conn_sendpkt(s->c, packet, HEADER_SIZE + bytesReceived);
+  
+  // Save packet in case it needs to be retransmitted
+  memcpy(s->sentPackets[s->sentListSize]->packet, &packet, HEADER_SIZE + bytesReceived);
+  s->sentListSize++;
+
+  free(packet);
 }
 
 void
 rel_output (rel_t *r)
 {
-  printf("rel output is called\n");
 }
 
 void

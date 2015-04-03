@@ -26,6 +26,9 @@
 #define SERVER_WAITING_FLUSH 1
 #define SERVER_DONE 2
 
+#define MAX_PAYLOAD_SIZE 500
+#define HEADER_SIZE 12
+
 struct reliable_state {
   rel_t *next;			/* Linked list for traversing all connections */
   rel_t **prev;
@@ -120,12 +123,38 @@ rel_demux (const struct config_common *cc,
 void
 rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
+  // Just proof of concept I should really be doing this in rel_output,
+  // but I'm not sure how to connect it yet
+  printf("Received packet\n");
+  printf("Packet contents: %s\n", pkt->data);
 }
-
 
 void
 rel_read (rel_t *s)
 {
+  char payloadBuffer[MAX_PAYLOAD_SIZE];
+  // conn_input stores data in payloadBuffer
+  int bytesReceived = conn_input(s->c, payloadBuffer, MAX_PAYLOAD_SIZE);
+
+  if (bytesReceived == 0) {
+    return; // no data is available at the moment, just return
+  }
+  else if (bytesReceived == -1) {
+    return; // EOF was received, need to add more to this later
+  }
+
+  // CAUTION: payloadBuffer has new line character at the end, will probably need to trim it off later
+  printf("Message: %s\n", payloadBuffer);
+  // now send data using conn_sendpkt
+  packet_t packet;
+  packet.cksum = 0;
+  // Will need to change len and 3rd input of conn_sendpkt later to more efficiently use buffer space
+  packet.len = HEADER_SIZE + MAX_PAYLOAD_SIZE;
+  packet.ackno = 0;
+  packet.seqno = 1;
+  memcpy(packet.data, payloadBuffer, MAX_PAYLOAD_SIZE);
+  printf("Verify data is the same: %s\n", packet.data);
+  conn_sendpkt(s->c, &packet, HEADER_SIZE + MAX_PAYLOAD_SIZE);
 }
 
 void

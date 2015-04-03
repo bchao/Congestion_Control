@@ -15,7 +15,16 @@
 
 #include "rlib.h"
 
+/* CLIENT STATES */
+#define CLIENT_WAITING_DATA 0
+#define CLIENT_WAITING_ACK 1
+#define CLIENT_WAITING_EOF_ACK 2
+#define CLIENT_DONE 3
 
+/* SERVER STATES */
+#define SERVER_WAITING_DATA 0
+#define SERVER_WAITING_FLUSH 1
+#define SERVER_DONE 2
 
 struct reliable_state {
   rel_t *next;			/* Linked list for traversing all connections */
@@ -25,9 +34,18 @@ struct reliable_state {
 
   /* Add your own data fields below this */
 
+  // Save retransmission timeout from config_common
+  int timeout;
+
   /* Client */
 
+  int client_state;
+
+
+
   /* Server */
+
+  int server_state;
 
 };
 rel_t *rel_list;

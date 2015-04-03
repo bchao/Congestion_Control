@@ -127,6 +127,9 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
   // but I'm not sure how to connect it yet
   printf("Received packet\n");
   printf("Packet contents: %s\n", pkt->data);
+  /* I think what should be happening is that there are send and receive buffers
+     and recvpkt puts whatever is received on the buffer if there is space
+     and then sends an ack back and rel_output is actually what does the outputting */
 }
 
 void
@@ -160,6 +163,7 @@ rel_read (rel_t *s)
 void
 rel_output (rel_t *r)
 {
+  printf("rel output is called\n");
 }
 
 void

@@ -153,7 +153,7 @@ rel_read (rel_t *s)
   packet.cksum = 0;
   // Will need to change len and 3rd input of conn_sendpkt later to more efficiently use buffer space
   packet.len = HEADER_SIZE + MAX_PAYLOAD_SIZE;
-  packet.ackno = 0;
+  packet.ackno = 1;
   packet.seqno = 1;
   memcpy(packet.data, payloadBuffer, MAX_PAYLOAD_SIZE);
   printf("Verify data is the same: %s\n", packet.data);

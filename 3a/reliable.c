@@ -28,6 +28,7 @@
 
 #define MAX_PAYLOAD_SIZE 500
 #define HEADER_SIZE 12
+#define ACK_PACKET_SIZE 8
 
 typedef struct packetWrapper {
   packet_t *packet;
@@ -41,11 +42,23 @@ struct reliable_state {
 
   /* Add your own data fields below this */
 
-  int windowSize;
-  int sentListSize, recvListSize;
   wrapper **sentPackets, **recvPackets;
+  int sentListSize, recvListSize;
+
+  int windowSize;
   // Save retransmission timeout from config_common
   int timeout;
+
+  // Sending side
+  int LAST_PACKET_ACKED;
+  int LAST_PACKET_SENT;
+  int LAST_PACKET_WRITTEN;
+
+  // Receiving side
+  int LAST_PACKET_READ;
+  int NEXT_PACKET_EXPECTED;
+  int LAST_PACKET_RECEIVED;
+
 
   /* Client */
   int client_state;
@@ -86,6 +99,7 @@ rel_create (conn_t *c, const struct sockaddr_storage *ss,
 
   /* Do any other initialization you need here */
   r->windowSize = cc->window;
+  // r->windowSize = 3;
   r->timeout = cc->timeout;
 
   r->sentListSize = 0;
@@ -101,6 +115,14 @@ rel_create (conn_t *c, const struct sockaddr_storage *ss,
     r->recvPackets[i] = malloc(sizeof(wrapper));
     r->recvPackets[i]->packet = malloc(sizeof(packet_t));
   }
+
+  r->LAST_PACKET_ACKED = 0;
+  r->LAST_PACKET_SENT = 0;
+  r->LAST_PACKET_WRITTEN = 0;
+
+  r->LAST_PACKET_READ = 0;
+  r->NEXT_PACKET_EXPECTED = 1;
+  r->LAST_PACKET_RECEIVED = 0;
 
   return r;
 }
@@ -146,50 +168,75 @@ rel_demux (const struct config_common *cc,
 void
 rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
-  // Just proof of concept I should really be doing this in rel_output,
-  // but I'm not sure how to connect it yet
-  printf("Received packet: %s\n", pkt->data);
-  /* I think what should be happening is that there are send and receive buffers
-     and recvpkt puts whatever is received on the buffer if there is space
-     and then sends an ack back and rel_output is actually what does the outputting */
-
-  // push packet to buffer if possible
-
-  // send ack back to sender
-  // struct ack_packet ackPacket;
-  // ackPacket.cksum = 0;
-  // ackPacket.len = 0;
-  // ackPacket.ackno = 0;
+  if (n == ACK_PACKET_SIZE) {
+    // ack packet
+    if (1) {
+      // this is the expected in order ack number
+    }
+    else {
+      // packets preceding this were dropped
+    }
+  }
+  else if (n == HEADER_SIZE) {
+    // signal to destroy? send eof?
+    rel_destroy(r);
+  }
+  else {
+    // data packet, conn_output if possible, write to buffer otherwise?
+    // holds data that arrives out of order and data that is in correct order, but app hasn't read yet
+    memcpy(r->recvPackets[r->recvListSize]->packet, pkt, sizeof(packet_t));
+    rel_output(r);
+    
+    struct ack_packet *ack;
+    ack = malloc(sizeof(*ack));
+    ack->cksum = 0;
+    ack->len = ACK_PACKET_SIZE;
+    ack->ackno = 0;
+    
+    if (1) {
+      // can output to stdout
+    }
+    else {
+      // receiving buffer is full, store somewhere?
+    }
+  }
 }
 
 void
 rel_read (rel_t *s)
 {
   // send data using conn_sendpkt
-  packet_t *packet;
-  packet = malloc(sizeof(*packet));
+  char payloadBuffer[MAX_PAYLOAD_SIZE];
 
-  int bytesReceived = conn_input(s->c, packet->data, MAX_PAYLOAD_SIZE);
-  // Trim leftover new line character
-  strtok(packet->data, "\n");
+  int bytesReceived = conn_input(s->c, payloadBuffer, MAX_PAYLOAD_SIZE);
   if (bytesReceived == 0) {
-    free(packet);
     return; // no data is available at the moment, just return
   }
   else if (bytesReceived == -1) {
-    packet->len = HEADER_SIZE;
-    free(packet);
     return; // EOF was received, need to add more to this later
   }
 
+  packet_t *packet;
+  packet = malloc(sizeof(*packet));
+
+  memcpy(packet->data, payloadBuffer, bytesReceived);
   packet->cksum = 0;
-  
   packet->len = HEADER_SIZE + bytesReceived;
-  packet->ackno = 1;
-  packet->seqno = 1;
-  conn_sendpkt(s->c, packet, HEADER_SIZE + bytesReceived);
+  packet->ackno = s->NEXT_PACKET_EXPECTED;
+  packet->seqno = s->LAST_PACKET_SENT + 1;
+
+  if (s->LAST_PACKET_SENT - s->LAST_PACKET_ACKED >= s->windowSize) {
+    // don't send, window's full
+    // just write to buffer for later? or drop?
+  }
+  else {
+    // can send packet
+    conn_sendpkt(s->c, packet, HEADER_SIZE + bytesReceived);
+    s->LAST_PACKET_SENT++;
+  }
+  s->LAST_PACKET_WRITTEN++;
   
-  // Save packet in case it needs to be retransmitted
+  // Save packet until it's acked/in case it needs to be retransmitted
   memcpy(s->sentPackets[s->sentListSize]->packet, &packet, HEADER_SIZE + bytesReceived);
   s->sentListSize++;
 
@@ -199,6 +246,8 @@ rel_read (rel_t *s)
 void
 rel_output (rel_t *r)
 {
+  conn_output(r->c, r->recvPackets[0]->packet->data,
+                r->recvPackets[0]->packet->len - HEADER_SIZE);
 }
 
 void

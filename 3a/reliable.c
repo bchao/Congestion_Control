@@ -69,6 +69,20 @@ struct reliable_state {
 };
 rel_t *rel_list;
 
+packet_t *
+createDataPacket (rel_t *r, char *payload, int bytesReceived) {
+  packet_t *packet;
+  packet = malloc(sizeof(*packet));
+
+  memcpy(packet->data, payload, bytesReceived);
+  packet->cksum = 0;
+  packet->len = HEADER_SIZE + bytesReceived;
+  packet->ackno = r->NEXT_PACKET_EXPECTED;
+  packet->seqno = r->LAST_PACKET_SENT + 1;
+
+  return packet;
+}
+
 /* Creates a new reliable protocol session, returns NULL on failure.
  * Exactly one of c and ss should be NULL.  (ss is NULL when called
  * from rlib.c, while c is NULL when this function is called from
@@ -172,6 +186,19 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
     // ack packet
     if (1) {
       // this is the expected in order ack number
+      r->LAST_PACKET_ACKED++;
+      // "delete" previous value
+      int shift = 0;
+      int i;
+      for (i = 0; i < r->LAST_PACKET_SENT - r->LAST_PACKET_ACKED; i++) {
+        if (pkt->ackno == r->sentPackets[i]->packet->seqno + 1) {
+          shift = 1;
+        }
+        if (shift) {
+          r->sentPackets[i] = r->sentPackets[i + 1];
+        }
+      }
+      rel_read(r);
     }
     else {
       // packets preceding this were dropped
@@ -184,20 +211,20 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
   else {
     // data packet, conn_output if possible, write to buffer otherwise?
     // holds data that arrives out of order and data that is in correct order, but app hasn't read yet
-    memcpy(r->recvPackets[r->recvListSize]->packet, pkt, sizeof(packet_t));
+    memcpy(r->recvPackets[r->LAST_PACKET_RECEIVED]->packet, pkt, sizeof(packet_t));
     rel_output(r);
-    
-    struct ack_packet *ack;
-    ack = malloc(sizeof(*ack));
-    ack->cksum = 0;
-    ack->len = ACK_PACKET_SIZE;
-    ack->ackno = 0;
-    
-    if (1) {
-      // can output to stdout
-    }
-    else {
-      // receiving buffer is full, store somewhere?
+
+    if (pkt->seqno == r->NEXT_PACKET_EXPECTED) {
+      r->NEXT_PACKET_EXPECTED++;
+      
+      struct ack_packet *ack;
+      ack = malloc(sizeof(*ack));
+      ack->cksum = 0;
+      ack->len = ACK_PACKET_SIZE;
+      ack->ackno = r->NEXT_PACKET_EXPECTED;
+
+      conn_sendpkt(r->c, (packet_t *)&ack, ACK_PACKET_SIZE);
+      free(ack);
     }
   }
 }
@@ -206,41 +233,42 @@ void
 rel_read (rel_t *s)
 {
   // send data using conn_sendpkt
-  char payloadBuffer[MAX_PAYLOAD_SIZE];
-
-  int bytesReceived = conn_input(s->c, payloadBuffer, MAX_PAYLOAD_SIZE);
-  if (bytesReceived == 0) {
-    return; // no data is available at the moment, just return
-  }
-  else if (bytesReceived == -1) {
-    return; // EOF was received, need to add more to this later
-  }
-
-  packet_t *packet;
-  packet = malloc(sizeof(*packet));
-
-  memcpy(packet->data, payloadBuffer, bytesReceived);
-  packet->cksum = 0;
-  packet->len = HEADER_SIZE + bytesReceived;
-  packet->ackno = s->NEXT_PACKET_EXPECTED;
-  packet->seqno = s->LAST_PACKET_SENT + 1;
 
   if (s->LAST_PACKET_SENT - s->LAST_PACKET_ACKED >= s->windowSize) {
     // don't send, window's full
     // just write to buffer for later? or drop?
+    if (s->LAST_PACKET_WRITTEN - s->LAST_PACKET_ACKED >= s->windowSize) {
+      // write to buffer? except I don't think LAST_PACKET_WRITTEN and LAST_PACKET_SENT are ever different
+      return;
+    }
+    else {
+      // no more space, drop packet
+      return;
+    }
   }
   else {
     // can send packet
+
+    char payloadBuffer[MAX_PAYLOAD_SIZE];
+
+    int bytesReceived = conn_input(s->c, payloadBuffer, MAX_PAYLOAD_SIZE);
+    if (bytesReceived == 0) {
+      return; // no data is available at the moment, just return
+    }
+    else if (bytesReceived == -1) {
+      return; // EOF was received, need to add more to this later
+    }
+    packet_t *packet = createDataPacket(s, payloadBuffer, bytesReceived);
+
+    // Save packet until it's acked/in case it needs to be retransmitted
+    memcpy(s->sentPackets[s->LAST_PACKET_SENT - s->LAST_PACKET_ACKED]->packet,
+              &packet, HEADER_SIZE + bytesReceived);
+    s->LAST_PACKET_WRITTEN++;
+
     conn_sendpkt(s->c, packet, HEADER_SIZE + bytesReceived);
     s->LAST_PACKET_SENT++;
+    free(packet);
   }
-  s->LAST_PACKET_WRITTEN++;
-  
-  // Save packet until it's acked/in case it needs to be retransmitted
-  memcpy(s->sentPackets[s->sentListSize]->packet, &packet, HEADER_SIZE + bytesReceived);
-  s->sentListSize++;
-
-  free(packet);
 }
 
 void

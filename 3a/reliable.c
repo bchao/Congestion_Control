@@ -68,7 +68,11 @@ struct reliable_state {
 rel_t *rel_list;
 
 int
-verifyChecksum () {
+verifyChecksum (rel_t *r, packet_t *pkt, size_t n) {
+  uint16_t checksum = pkt->cksum;
+  uint16_t len = ntohs(pkt->len);
+
+
   return 1;
 }
 
@@ -92,8 +96,8 @@ createAckPacket (rel_t *r) {
   ack = malloc(sizeof(*ack));
 
   ack->cksum = 0;
-  ack->len = ACK_PACKET_SIZE;
-  ack->ackno = r->NEXT_PACKET_EXPECTED;
+  ack->len = htons(ACK_PACKET_SIZE);
+  ack->ackno = htonl(r->NEXT_PACKET_EXPECTED);
 
   return ack;
 }
@@ -118,9 +122,9 @@ createDataPacket (rel_t *r, char *payload, int bytesReceived) {
 
   memcpy(packet->data, payload, bytesReceived);
   packet->cksum = 0;
-  packet->len = HEADER_SIZE + bytesReceived;
-  packet->ackno = r->NEXT_PACKET_EXPECTED;
-  packet->seqno = r->LAST_PACKET_SENT + 1;
+  packet->len = htons(HEADER_SIZE + bytesReceived);
+  packet->ackno = htonl(r->NEXT_PACKET_EXPECTED);
+  packet->seqno = htonl(r->LAST_PACKET_SENT + 1);
 
   return packet;
 }
@@ -222,12 +226,18 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
   // TODO: Do we need to check the checksum of the received packet here first???
 
-  if (!verifyChecksum() || 0) { // 0 should be replaced by pkt->len != n I think
+  uint16_t len = ntohs(pkt->len);
+  uint32_t ackno = ntohl(pkt->ackno);
+
+  if (!verifyChecksum(r, pkt, n) || len != n) {
     // Checksum not equal or packet was padded or sustained losses
     return;
   }
 
   if (n == ACK_PACKET_SIZE) {
+
+    // TODO: Check for duplicate acks
+
     // ack packet
     if (1) {
       // this is the expected in order ack number
@@ -247,12 +257,15 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
     rel_destroy(r);
   }
   else {
+
+    uint32_t seqno = ntohl(pkt->seqno);
+
     // data packet, conn_output if possible, write to buffer otherwise?
     // holds data that arrives out of order and data that is in correct order, but app hasn't read yet
     memcpy(r->recvPackets[0]->packet, pkt, sizeof(packet_t));
     rel_output(r);
 
-    if (pkt->seqno == r->NEXT_PACKET_EXPECTED) {
+    if (seqno == r->NEXT_PACKET_EXPECTED) {
       r->NEXT_PACKET_EXPECTED++;
       
       struct ack_packet *ack = createAckPacket(r);

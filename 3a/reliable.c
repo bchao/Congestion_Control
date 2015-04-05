@@ -77,9 +77,12 @@ createAckPacket () {
   return;
 }
 
-int
-getCurrentTime () {
-  return 0;
+uint32_t
+getCurrentTime () { // Returns time in ms since epoch
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  uint32_t ms = (tv.tv_sec * 1000) + (tv.tv_usec / 1000);
+  return ms;
 }
 
 void
@@ -196,6 +199,8 @@ rel_demux (const struct config_common *cc,
 void
 rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
+  // TODO: Do we need to check the checksum of the received packet here first???
+
   if (n == ACK_PACKET_SIZE) {
     // ack packet
     if (1) {
@@ -280,6 +285,9 @@ rel_read (rel_t *s)
 void
 rel_output (rel_t *r)
 {
+
+  // TODO: Use conn_bufspace to check if the output buffer is large enough for the received data
+
   conn_output(r->c, r->recvPackets[0]->packet->data,
                 r->recvPackets[0]->packet->len - HEADER_SIZE);
 }

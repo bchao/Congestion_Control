@@ -67,6 +67,11 @@ struct reliable_state {
 };
 rel_t *rel_list;
 
+int
+verifyChecksum () {
+  return 1;
+}
+
 void
 shiftPacketList (rel_t *r, packet_t *pkt) {
   int shift = 0, i;
@@ -217,13 +222,20 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
   // TODO: Do we need to check the checksum of the received packet here first???
 
+  if (!verifyChecksum() || 0 { // Also have to check for length pkt->len != n
+    // Checksum not equal or packet was padded or sustained losses
+    return;
+  }
+
   if (n == ACK_PACKET_SIZE) {
     // ack packet
     if (1) {
       // this is the expected in order ack number
       r->LAST_PACKET_ACKED++;
+
       // "delete" previous value
-      shiftPacketList(r, pkt);
+      shiftPacketList(r, pkt); // Probably not correct
+
       rel_read(r);
     }
     else {

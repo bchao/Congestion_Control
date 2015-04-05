@@ -32,6 +32,8 @@
 
 typedef struct packetWrapper {
   packet_t *packet;
+  uint32_t sentTime;
+  int acked;
 } wrapper;
 
 struct reliable_state {
@@ -52,13 +54,9 @@ struct reliable_state {
   // Sending side
   int LAST_PACKET_ACKED;
   int LAST_PACKET_SENT;
-  int LAST_PACKET_WRITTEN;
 
   // Receiving side
-  int LAST_PACKET_READ;
   int NEXT_PACKET_EXPECTED;
-  int LAST_PACKET_RECEIVED;
-
 
   /* Client */
   int client_state;
@@ -68,6 +66,26 @@ struct reliable_state {
 
 };
 rel_t *rel_list;
+
+void
+shiftPacketList () {
+  return;
+}
+
+void
+createAckPacket () {
+  return;
+}
+
+int
+getCurrentTime () {
+  return 0;
+}
+
+void
+retransmitPacket (wrapper *pW) {
+  return;
+}
 
 packet_t *
 createDataPacket (rel_t *r, char *payload, int bytesReceived) {
@@ -113,7 +131,6 @@ rel_create (conn_t *c, const struct sockaddr_storage *ss,
 
   /* Do any other initialization you need here */
   r->windowSize = cc->window;
-  // r->windowSize = 3;
   r->timeout = cc->timeout;
 
   r->sentListSize = 0;
@@ -132,11 +149,8 @@ rel_create (conn_t *c, const struct sockaddr_storage *ss,
 
   r->LAST_PACKET_ACKED = 0;
   r->LAST_PACKET_SENT = 0;
-  r->LAST_PACKET_WRITTEN = 0;
 
-  r->LAST_PACKET_READ = 0;
   r->NEXT_PACKET_EXPECTED = 1;
-  r->LAST_PACKET_RECEIVED = 0;
 
   return r;
 }
@@ -211,7 +225,7 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
   else {
     // data packet, conn_output if possible, write to buffer otherwise?
     // holds data that arrives out of order and data that is in correct order, but app hasn't read yet
-    memcpy(r->recvPackets[r->LAST_PACKET_RECEIVED]->packet, pkt, sizeof(packet_t));
+    memcpy(r->recvPackets[0]->packet, pkt, sizeof(packet_t));
     rel_output(r);
 
     if (pkt->seqno == r->NEXT_PACKET_EXPECTED) {
@@ -226,49 +240,41 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
       conn_sendpkt(r->c, (packet_t *)&ack, ACK_PACKET_SIZE);
       free(ack);
     }
+    else {
+      // store in buffer
+    }
   }
 }
 
 void
 rel_read (rel_t *s)
 {
-  // send data using conn_sendpkt
-
-  if (s->LAST_PACKET_SENT - s->LAST_PACKET_ACKED >= s->windowSize) {
+  int numPacketsInWindow = s->LAST_PACKET_SENT - s->LAST_PACKET_ACKED;
+  if (numPacketsInWindow >= s->windowSize) {
     // don't send, window's full
     // just write to buffer for later? or drop?
-    if (s->LAST_PACKET_WRITTEN - s->LAST_PACKET_ACKED >= s->windowSize) {
-      // write to buffer? except I don't think LAST_PACKET_WRITTEN and LAST_PACKET_SENT are ever different
-      return;
-    }
-    else {
-      // no more space, drop packet
-      return;
-    }
+    return;
   }
-  else {
-    // can send packet
+  // can send packet
+  char payloadBuffer[MAX_PAYLOAD_SIZE];
 
-    char payloadBuffer[MAX_PAYLOAD_SIZE];
-
-    int bytesReceived = conn_input(s->c, payloadBuffer, MAX_PAYLOAD_SIZE);
-    if (bytesReceived == 0) {
-      return; // no data is available at the moment, just return
-    }
-    else if (bytesReceived == -1) {
-      return; // EOF was received, need to add more to this later
-    }
-    packet_t *packet = createDataPacket(s, payloadBuffer, bytesReceived);
-
-    // Save packet until it's acked/in case it needs to be retransmitted
-    memcpy(s->sentPackets[s->LAST_PACKET_SENT - s->LAST_PACKET_ACKED]->packet,
-              &packet, HEADER_SIZE + bytesReceived);
-    s->LAST_PACKET_WRITTEN++;
-
-    conn_sendpkt(s->c, packet, HEADER_SIZE + bytesReceived);
-    s->LAST_PACKET_SENT++;
-    free(packet);
+  int bytesReceived = conn_input(s->c, payloadBuffer, MAX_PAYLOAD_SIZE);
+  if (bytesReceived == 0) {
+    return; // no data is available at the moment, just return
   }
+  else if (bytesReceived == -1) {
+    return; // EOF was received, need to add more to this later
+  }
+  packet_t *packet = createDataPacket(s, payloadBuffer, bytesReceived);
+
+  // Save packet until it's acked/in case it needs to be retransmitted
+  memcpy(s->sentPackets[numPacketsInWindow]->packet, &packet, HEADER_SIZE + bytesReceived);
+  // Get real time and set it to this, when timer is called check for differences and retransmit
+  s->sentPackets[numPacketsInWindow]->sentTime = getCurrentTime();
+  s->sentPackets[numPacketsInWindow]->acked = 0;
+  conn_sendpkt(s->c, packet, HEADER_SIZE + bytesReceived);
+  s->LAST_PACKET_SENT++;
+  free(packet);
 }
 
 void
@@ -282,5 +288,19 @@ void
 rel_timer ()
 {
   /* Retransmit any packets that need to be retransmitted */
+  rel_t *r = rel_list;
 
+  while (r != NULL) {
+    int numPacketsInWindow = r->LAST_PACKET_SENT - r->LAST_PACKET_ACKED;
+    int i;
+    for (i = 0; i < numPacketsInWindow; i++) {
+      int curTime = getCurrentTime();
+      if ((curTime - r->sentPackets[i]->sentTime > r->timeout) && r->sentPackets[i]->acked == 0) {
+        // retransmit package
+        retransmitPacket(r->sentPackets[i]);
+      }
+      r->sentPackets[i];
+    }
+    r = r->next;
+  }
 }

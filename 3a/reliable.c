@@ -307,7 +307,7 @@ rel_timer ()
         // retransmit package
         retransmitPacket(r->sentPackets[i]);
       }
-      r->sentPackets[i];
+      // r->sentPackets[i];
     }
     r = r->next;
   }

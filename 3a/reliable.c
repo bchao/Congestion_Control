@@ -69,9 +69,8 @@ rel_t *rel_list;
 
 int
 verifyChecksum (rel_t *r, packet_t *pkt, size_t n) {
-  uint16_t checksum = pkt->cksum;
-  uint16_t len = ntohs(pkt->len);
-
+  // uint16_t checksum = pkt->cksum;
+  // uint16_t len = ntohs(pkt->len);
 
   return 1;
 }
@@ -225,20 +224,15 @@ void
 rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
   // TODO: Do we need to check the checksum of the received packet here first???
-<<<<<<< HEAD
-  sleep(5);
-  
-  if (!verifyChecksum() || 0) { // 0 should be replaced by pkt->len != n I think
-=======
+  // sleep(5);
 
-  uint16_t len = ntohs(pkt->len);
-  uint32_t ackno = ntohl(pkt->ackno);
+  // uint16_t len = ntohs(pkt->len);
+  // uint32_t ackno = ntohl(pkt->ackno);
 
-  if (!verifyChecksum(r, pkt, n) || len != n) {
->>>>>>> 147eac40e89060d661d6cb190e918ce9cb9b2cce
-    // Checksum not equal or packet was padded or sustained losses
-    return;
-  }
+  // if (!verifyChecksum(r, pkt, n) || 0) {
+  //   // Checksum not equal or packet was padded or sustained losses
+  //   return;
+  // }
 
   if (n == ACK_PACKET_SIZE) {
 

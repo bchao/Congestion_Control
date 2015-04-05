@@ -221,7 +221,8 @@ void
 rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
   // TODO: Do we need to check the checksum of the received packet here first???
-
+  sleep(5);
+  
   if (!verifyChecksum() || 0) { // 0 should be replaced by pkt->len != n I think
     // Checksum not equal or packet was padded or sustained losses
     return;
@@ -273,7 +274,6 @@ rel_read (rel_t *s)
   int numPacketsInWindow = s->LAST_PACKET_SENT - s->LAST_PACKET_ACKED;
   if (numPacketsInWindow >= s->windowSize) {
     // don't send, window's full
-    // just write to buffer for later? or drop?
     return;
   }
   // can send packet
@@ -290,7 +290,6 @@ rel_read (rel_t *s)
 
   // Save packet until it's acked/in case it needs to be retransmitted
   memcpy(s->sentPackets[numPacketsInWindow]->packet, &packet, HEADER_SIZE + bytesReceived);
-  // Get real time and set it to this, when timer is called check for differences and retransmit
   s->sentPackets[numPacketsInWindow]->sentTime = getCurrentTime();
   s->sentPackets[numPacketsInWindow]->acked = 0;
   conn_sendpkt(s->c, packet, HEADER_SIZE + bytesReceived);

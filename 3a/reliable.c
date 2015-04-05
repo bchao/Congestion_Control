@@ -68,13 +68,29 @@ struct reliable_state {
 rel_t *rel_list;
 
 void
-shiftPacketList () {
+shiftPacketList (rel_t *r, packet_t *pkt) {
+  int shift = 0, i;
+  for (i = 0; i < r->LAST_PACKET_SENT - r->LAST_PACKET_ACKED; i++) {
+    if (pkt->ackno == r->sentPackets[i]->packet->seqno + 1) {
+      shift = 1;
+    }
+    if (shift) {
+      r->sentPackets[i] = r->sentPackets[i + 1];
+    }
+  }
   return;
 }
 
-void
-createAckPacket () {
-  return;
+struct ack_packet *
+createAckPacket (rel_t *r) {
+  struct ack_packet *ack;
+  ack = malloc(sizeof(*ack));
+
+  ack->cksum = 0;
+  ack->len = ACK_PACKET_SIZE;
+  ack->ackno = r->NEXT_PACKET_EXPECTED;
+
+  return ack;
 }
 
 uint32_t
@@ -207,16 +223,7 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
       // this is the expected in order ack number
       r->LAST_PACKET_ACKED++;
       // "delete" previous value
-      int shift = 0;
-      int i;
-      for (i = 0; i < r->LAST_PACKET_SENT - r->LAST_PACKET_ACKED; i++) {
-        if (pkt->ackno == r->sentPackets[i]->packet->seqno + 1) {
-          shift = 1;
-        }
-        if (shift) {
-          r->sentPackets[i] = r->sentPackets[i + 1];
-        }
-      }
+      shiftPacketList(r, pkt);
       rel_read(r);
     }
     else {
@@ -236,13 +243,10 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
     if (pkt->seqno == r->NEXT_PACKET_EXPECTED) {
       r->NEXT_PACKET_EXPECTED++;
       
-      struct ack_packet *ack;
-      ack = malloc(sizeof(*ack));
-      ack->cksum = 0;
-      ack->len = ACK_PACKET_SIZE;
-      ack->ackno = r->NEXT_PACKET_EXPECTED;
+      struct ack_packet *ack = createAckPacket(r);
 
       conn_sendpkt(r->c, (packet_t *)&ack, ACK_PACKET_SIZE);
+
       free(ack);
     }
     else {
@@ -305,7 +309,8 @@ rel_timer ()
       int curTime = getCurrentTime();
       if ((curTime - r->sentPackets[i]->sentTime > r->timeout) && r->sentPackets[i]->acked == 0) {
         // retransmit package
-        retransmitPacket(r->sentPackets[i]);
+        // retransmitPacket(r->sentPackets[i]);
+        conn_sendpkt(r->c, r->sentPackets[i]->packet, HEADER_SIZE + r->sentPackets[i]->packet->len);
       }
       // r->sentPackets[i];
     }

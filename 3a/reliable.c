@@ -222,7 +222,7 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
   // TODO: Do we need to check the checksum of the received packet here first???
 
-  if (!verifyChecksum() || 0 { // Also have to check for length pkt->len != n
+  if (!verifyChecksum() || 0) { // 0 should be replaced by pkt->len != n I think
     // Checksum not equal or packet was padded or sustained losses
     return;
   }

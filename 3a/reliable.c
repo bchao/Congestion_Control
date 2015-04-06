@@ -242,14 +242,18 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
   uint16_t len = ntohs(pkt->len);
   uint32_t ackno = ntohl(pkt->ackno);
+  uint32_t seqno = ntohl(pkt->seqno);
 
   int verified = verifyChecksum(r, pkt, n);
-  if (!verified || (len != n)) {
+  if (!verified || (len != n)) { // drop packets with bad length
     return;
   }
 
   if (len == ACK_PACKET_SIZE) {
-    // TODO: Check for duplicate acks
+
+    if (ackno <= r->LAST_PACKET_ACKED) { //duplicate ack
+      return;
+    }
     // ack packet
     if (ackno == r->LAST_PACKET_SENT + 1) { // Should be changed to LAST_PACKET_ACKED + 1 later?
       // this is the expected in order ack number
@@ -266,7 +270,6 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
   }
   else if (len == HEADER_SIZE) {
     // signal to destroy? send eof?
-    uint32_t seqno = ntohl(pkt->seqno);
     if (seqno == r->NEXT_PACKET_EXPECTED) {
       struct ack_packet *ack = createAckPacket(r);
 
@@ -275,13 +278,19 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
       r->NEXT_PACKET_EXPECTED++;
       free(ack);
       // rel_destroy(r);
-    }
+    } 
   }
   else {
+    if (seqno < r->NEXT_PACKET_EXPECTED - 1) { // duplicate packet
+      return;
+    }
+    if (seqno - r->NEXT_PACKET_EXPECTED > r->windowSize) { // packet outside window
+      return;
+    }
     // holds data that arrives out of order and data that is in correct order, but app hasn't read yet
     // memcpy(r->recvPackets[0]->packet, pkt, sizeof(packet_t));
     // rel_output(r);
-    uint32_t seqno = ntohl(pkt->seqno);
+
     // size_t availableLength = conn_bufspace(r->c);
     if (seqno == r->NEXT_PACKET_EXPECTED) {
       struct ack_packet *ack = createAckPacket(r);
@@ -361,9 +370,11 @@ rel_timer ()
     for (i = 0; i < numPacketsInWindow; i++) {
       int curTime = getCurrentTime();
       if (curTime - r->sentPackets[i]->sentTime > r->timeout) {
+        r->sentPackets[i]->sentTime = curTime;
         // retransmit package
         // retransmitPacket(r->sentPackets[i]);
-        conn_sendpkt(r->c, r->sentPackets[i]->packet, HEADER_SIZE + r->sentPackets[i]->packet->len);
+        printf("RETRANSMITTING\n");
+        conn_sendpkt(r->c, r->sentPackets[i]->packet, ntohs(r->sentPackets[i]->packet->len));
       }
       // r->sentPackets[i];
     }

@@ -68,7 +68,7 @@ struct reliable_state {
 rel_t *rel_list;
 
 void
-movePacketToTail () {
+movePacketToTail (wrapper *curPacketNode) {
   return;
 }
 
@@ -371,23 +371,23 @@ rel_timer ()
 {
   /* Retransmit any packets that need to be retransmitted */
   rel_t *r = rel_list;
-
+  uint32_t curTime = getCurrentTime();
+  
   while (r != NULL) {
     printf("HERE\n");
     int numPacketsInWindow = r->LAST_PACKET_SENT - r->LAST_PACKET_ACKED;
     int i;
     for (i = 0; i < numPacketsInWindow; i++) {
-      uint32_t curTime = getCurrentTime();
-      if (curTime - r->sentPackets[i]->sentTime > r->timeout) {
-        r->sentPackets[i]->sentTime = curTime;
+      wrapper *curPacketNode = r->sentPackets[i];
+      if (curTime - curPacketNode->sentTime > r->timeout) {
+        curPacketNode->sentTime = curTime;
         // retransmit package
         // retransmitPacket(r->sentPackets[i]);
         printf("RETRANSMITTING\n");
         // Move original packet to the end of sentPackets
-        movePacketToTail(r->sentPackets[i]);
-        conn_sendpkt(r->c, r->sentPackets[i]->packet, ntohs(r->sentPackets[i]->packet->len));
+        movePacketToTail(curPacketNode);
+        conn_sendpkt(r->c, curPacketNode->packet, ntohs(curPacketNode->packet->len));
       }
-      // r->sentPackets[i];
     }
     r = r->next;
   }

@@ -68,7 +68,13 @@ struct reliable_state {
 rel_t *rel_list;
 
 void
-movePacketToTail (wrapper *curPacketNode) {
+movePacketToTail (int position, rel_t *r, wrapper *curPacketNode) {
+  int numPacketsInWindow = r->LAST_PACKET_SENT - r->LAST_PACKET_ACKED;
+  int i;
+  for (i = position; i < numPacketsInWindow - 1; i++) {
+    r->sentPackets[i] = r->sentPackets[i+1];
+  }
+  r->sentPackets[numPacketsInWindow - 1] = curPacketNode;
   return;
 }
 
@@ -253,7 +259,7 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
     return;
   }
 
-  if (len == ACK_PACKET_SIZE) {
+  if (len == ACK_PACKET_SIZE) { // ack packet
 
     if (ackno <= r->LAST_PACKET_ACKED) { //duplicate ack
       return;
@@ -272,7 +278,7 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
       // packets preceding this were dropped
     }
   }
-  else if (len == HEADER_SIZE) {
+  else if (len == HEADER_SIZE) { // eof condition, destroy??
     // signal to destroy? send eof?
 
     uint32_t seqno = ntohl(pkt->seqno);
@@ -305,11 +311,16 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 
       conn_sendpkt(r->c, (packet_t *)ack, ACK_PACKET_SIZE);
       conn_output(r->c, pkt->data, len - HEADER_SIZE);
+      // rel_output(r);
       r->NEXT_PACKET_EXPECTED++;
       free(ack);
     }
     else {
       // store in buffer
+
+      // int slot = seqno - r->NEXT_PACKET_EXPECTED + 1;
+      // memcpy(r->recvPackets[slot]->packet, pkt, sizeof(packet_t));
+      // r->recvPackets[slot]->sentTime = getCurrentTime();
     }
   }
 }
@@ -386,7 +397,7 @@ rel_timer ()
         // retransmitPacket(r->sentPackets[i]);
         printf("RETRANSMITTING\n");
         // TODO: Implement movePacketToTail to move original packet to the end of sentPackets
-        movePacketToTail(curPacketNode);
+        movePacketToTail(i, r, curPacketNode);
         conn_sendpkt(r->c, curPacketNode->packet, ntohs(curPacketNode->packet->len));
       }
     }

@@ -365,10 +365,11 @@ rel_timer ()
   rel_t *r = rel_list;
 
   while (r != NULL) {
+    printf("HERE\n");
     int numPacketsInWindow = r->LAST_PACKET_SENT - r->LAST_PACKET_ACKED;
     int i;
     for (i = 0; i < numPacketsInWindow; i++) {
-      int curTime = getCurrentTime();
+      uint32_t curTime = getCurrentTime();
       if (curTime - r->sentPackets[i]->sentTime > r->timeout) {
         r->sentPackets[i]->sentTime = curTime;
         // retransmit package

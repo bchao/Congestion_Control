@@ -356,6 +356,7 @@ rel_read (rel_t *s)
 void
 rel_output (rel_t *r)
 {
+  // TODO: Support window sizes greater than 1
   packet_t *pkt = r->recvPackets[0]->packet;
   uint16_t packet_len = ntohs(pkt->len);
   size_t len = conn_bufspace(r->c);
@@ -384,7 +385,7 @@ rel_timer ()
         // retransmit package
         // retransmitPacket(r->sentPackets[i]);
         printf("RETRANSMITTING\n");
-        // Move original packet to the end of sentPackets
+        // TODO: Implement movePacketToTail to move original packet to the end of sentPackets
         movePacketToTail(curPacketNode);
         conn_sendpkt(r->c, curPacketNode->packet, ntohs(curPacketNode->packet->len));
       }

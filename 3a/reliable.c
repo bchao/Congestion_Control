@@ -240,11 +240,10 @@ shiftPacketList (rel_t *r, packet_t *pkt) {
 void
 rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
-  // TODO: Do we need to check the checksum of the received packet here first???
   uint16_t len = ntohs(pkt->len);
   uint32_t ackno = ntohl(pkt->ackno);
-  if (!verifyChecksum(r, pkt, n) || (len != n)) { // 0 needs to be changed to pkt->len != n
-    // Checksum not equal or packet was padded or sustained losses
+
+  if (!verifyChecksum(r, pkt, n) || (len != n)) {
     return;
   }
 

@@ -69,9 +69,6 @@ rel_t *rel_list;
 
 int
 verifyChecksum (rel_t *r, packet_t *pkt, size_t n) {
-  // uint16_t checksum = pkt->cksum;
-  // uint16_t len = ntohs(pkt->len);
-
   return 1;
 }
 
@@ -94,7 +91,7 @@ createAckPacket (rel_t *r) {
   struct ack_packet *ack;
   ack = malloc(sizeof(*ack));
 
-  ack->cksum = 0;
+  ack->cksum = htons(0);
   ack->len = htons(ACK_PACKET_SIZE);
   ack->ackno = htonl(r->NEXT_PACKET_EXPECTED);
 
@@ -120,7 +117,7 @@ createDataPacket (rel_t *r, char *payload, int bytesReceived) {
   packet = malloc(sizeof(*packet));
 
   memcpy(packet->data, payload, bytesReceived);
-  packet->cksum = 0;
+  packet->cksum = htons(0);
   packet->len = htons(HEADER_SIZE + bytesReceived);
   packet->ackno = htonl(r->NEXT_PACKET_EXPECTED);
   packet->seqno = htonl(r->LAST_PACKET_SENT + 1);
@@ -224,15 +221,16 @@ void
 rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
   // TODO: Do we need to check the checksum of the received packet here first???
-  // sleep(5);
 
-  // uint16_t len = ntohs(pkt->len);
-  // uint32_t ackno = ntohl(pkt->ackno);
+  pkt->len = ntohs(pkt->len);
+  pkt->cksum = ntohs(pkt->cksum);
+  pkt->ackno = ntohl(pkt->ackno);
+  pkt->seqno = ntohl(pkt->seqno);
 
-  // if (!verifyChecksum(r, pkt, n) || 0) {
-  //   // Checksum not equal or packet was padded or sustained losses
-  //   return;
-  // }
+  if (!verifyChecksum(r, pkt, n) || 0) {
+    // Checksum not equal or packet was padded or sustained losses
+    return;
+  }
 
   if (n == ACK_PACKET_SIZE) {
 
@@ -257,15 +255,12 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
     rel_destroy(r);
   }
   else {
-
-    uint32_t seqno = ntohl(pkt->seqno);
-
     // data packet, conn_output if possible, write to buffer otherwise?
     // holds data that arrives out of order and data that is in correct order, but app hasn't read yet
     memcpy(r->recvPackets[0]->packet, pkt, sizeof(packet_t));
     rel_output(r);
 
-    if (seqno == r->NEXT_PACKET_EXPECTED) {
+    if (pkt->seqno == r->NEXT_PACKET_EXPECTED) {
       r->NEXT_PACKET_EXPECTED++;
       
       struct ack_packet *ack = createAckPacket(r);

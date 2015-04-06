@@ -339,10 +339,14 @@ rel_read (rel_t *s)
 void
 rel_output (rel_t *r)
 {
-
+  packet_t *pkt = r->recvPackets[0]->packet;
+  uint16_t packet_len = ntohs(pkt->len);
+  size_t len = conn_bufspace(r->c);
   // TODO: Use conn_bufspace to check if the output buffer is large enough for the received data
-  conn_output(r->c, r->recvPackets[0]->packet->data,
-                r->recvPackets[0]->packet->len - HEADER_SIZE);
+
+  if (len >= packet_len - HEADER_SIZE) {
+    conn_output(r->c, pkt->data, packet_len - HEADER_SIZE);
+  }
 }
 
 void

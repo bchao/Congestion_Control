@@ -269,11 +269,11 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
     // memcpy(r->recvPackets[0]->packet, pkt, sizeof(packet_t));
     // rel_output(r);
     uint32_t seqno = ntohl(pkt->seqno);
-    if (seqno == r->NEXT_PACKET_EXPECTED) {
+    size_t availableLength = conn_bufspace(r->c);
+    if (seqno == r->NEXT_PACKET_EXPECTED && (len - HEADER_SIZE < availableLength)) {
       struct ack_packet *ack = createAckPacket(r);
 
       conn_sendpkt(r->c, (packet_t *)ack, ACK_PACKET_SIZE);
-
       conn_output(r->c, pkt->data, len - HEADER_SIZE);
       r->NEXT_PACKET_EXPECTED++;
       free(ack);
@@ -327,20 +327,20 @@ void
 rel_timer ()
 {
   /* Retransmit any packets that need to be retransmitted */
-  // rel_t *r = rel_list;
+  rel_t *r = rel_list;
 
-  // while (r != NULL) {
-  //   int numPacketsInWindow = r->LAST_PACKET_SENT - r->LAST_PACKET_ACKED;
-  //   int i;
-  //   for (i = 0; i < numPacketsInWindow; i++) {
-  //     int curTime = getCurrentTime();
-  //     if (curTime - r->sentPackets[i]->sentTime > r->timeout) {
-  //       // retransmit package
-  //       // retransmitPacket(r->sentPackets[i]);
-  //       conn_sendpkt(r->c, r->sentPackets[i]->packet, HEADER_SIZE + r->sentPackets[i]->packet->len);
-  //     }
-  //     // r->sentPackets[i];
-  //   }
-  //   r = r->next;
-  // }
+  while (r != NULL) {
+    int numPacketsInWindow = r->LAST_PACKET_SENT - r->LAST_PACKET_ACKED;
+    int i;
+    for (i = 0; i < numPacketsInWindow; i++) {
+      int curTime = getCurrentTime();
+      if (curTime - r->sentPackets[i]->sentTime > r->timeout) {
+        // retransmit package
+        // retransmitPacket(r->sentPackets[i]);
+        conn_sendpkt(r->c, r->sentPackets[i]->packet, HEADER_SIZE + r->sentPackets[i]->packet->len);
+      }
+      // r->sentPackets[i];
+    }
+    r = r->next;
+  }
 }

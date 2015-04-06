@@ -242,7 +242,6 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
   uint16_t len = ntohs(pkt->len);
   uint32_t ackno = ntohl(pkt->ackno);
-  uint32_t seqno = ntohl(pkt->seqno);
 
   int verified = verifyChecksum(r, pkt, n);
   if (!verified || (len != n)) { // drop packets with bad length
@@ -270,6 +269,8 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
   }
   else if (len == HEADER_SIZE) {
     // signal to destroy? send eof?
+
+    uint32_t seqno = ntohl(pkt->seqno);
     if (seqno == r->NEXT_PACKET_EXPECTED) {
       struct ack_packet *ack = createAckPacket(r);
 
@@ -281,6 +282,8 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
     } 
   }
   else {
+    uint32_t seqno = ntohl(pkt->seqno);
+    
     if (seqno < r->NEXT_PACKET_EXPECTED - 1) { // duplicate packet
       return;
     }

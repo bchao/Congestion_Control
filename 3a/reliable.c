@@ -316,31 +316,35 @@ rel_read (rel_t *s)
 void
 rel_output (rel_t *r)
 {
-
+  packet_t *pkt = r->recvPackets[0]->packet;
+  uint16_t packet_len = ntohs(pkt->len);
+  size_t len = conn_bufspace(r->c);
   // TODO: Use conn_bufspace to check if the output buffer is large enough for the received data
 
-  conn_output(r->c, r->recvPackets[0]->packet->data,
-                r->recvPackets[0]->packet->len - HEADER_SIZE);
+  if (len >= packet_len - HEADER_SIZE) {
+    conn_output(r->c, pkt->data, packet_len - HEADER_SIZE);
+  }
+
 }
 
 void
 rel_timer ()
 {
   /* Retransmit any packets that need to be retransmitted */
-  // rel_t *r = rel_list;
+  rel_t *r = rel_list;
 
-  // while (r != NULL) {
-  //   int numPacketsInWindow = r->LAST_PACKET_SENT - r->LAST_PACKET_ACKED;
-  //   int i;
-  //   for (i = 0; i < numPacketsInWindow; i++) {
-  //     int curTime = getCurrentTime();
-  //     if (curTime - r->sentPackets[i]->sentTime > r->timeout) {
-  //       // retransmit package
-  //       // retransmitPacket(r->sentPackets[i]);
-  //       conn_sendpkt(r->c, r->sentPackets[i]->packet, HEADER_SIZE + r->sentPackets[i]->packet->len);
-  //     }
-  //     // r->sentPackets[i];
-  //   }
-  //   r = r->next;
-  // }
+  while (r != NULL) {
+    int numPacketsInWindow = r->LAST_PACKET_SENT - r->LAST_PACKET_ACKED;
+    int i;
+    for (i = 0; i < numPacketsInWindow; i++) {
+      int curTime = getCurrentTime();
+      if (curTime - r->sentPackets[i]->sentTime > r->timeout) {
+        // retransmit package
+        // retransmitPacket(r->sentPackets[i]);
+        conn_sendpkt(r->c, r->sentPackets[i]->packet, HEADER_SIZE + r->sentPackets[i]->packet->len);
+      }
+      // r->sentPackets[i];
+    }
+    r = r->next;
+  }
 }

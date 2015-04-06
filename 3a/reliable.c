@@ -67,6 +67,11 @@ struct reliable_state {
 };
 rel_t *rel_list;
 
+void
+movePacketToTail () {
+  return;
+}
+
 int
 verifyChecksum (rel_t *r, packet_t *pkt, size_t n) {
   uint16_t checksum = pkt->cksum;
@@ -283,7 +288,7 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
   }
   else {
     uint32_t seqno = ntohl(pkt->seqno);
-    
+
     if (seqno < r->NEXT_PACKET_EXPECTED - 1) { // duplicate packet
       return;
     }
@@ -378,6 +383,8 @@ rel_timer ()
         // retransmit package
         // retransmitPacket(r->sentPackets[i]);
         printf("RETRANSMITTING\n");
+        // Move original packet to the end of sentPackets
+        movePacketToTail(r->sentPackets[i]);
         conn_sendpkt(r->c, r->sentPackets[i]->packet, ntohs(r->sentPackets[i]->packet->len));
       }
       // r->sentPackets[i];

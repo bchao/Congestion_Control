@@ -269,11 +269,11 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
     // memcpy(r->recvPackets[0]->packet, pkt, sizeof(packet_t));
     // rel_output(r);
     uint32_t seqno = ntohl(pkt->seqno);
-    if (seqno == r->NEXT_PACKET_EXPECTED) {
+    size_t availableLength = conn_bufspace(r->c);
+    if (seqno == r->NEXT_PACKET_EXPECTED && (len - HEADER_SIZE < availableLength)) {
       struct ack_packet *ack = createAckPacket(r);
 
       conn_sendpkt(r->c, (packet_t *)ack, ACK_PACKET_SIZE);
-
       conn_output(r->c, pkt->data, len - HEADER_SIZE);
       r->NEXT_PACKET_EXPECTED++;
       free(ack);

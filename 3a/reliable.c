@@ -57,6 +57,7 @@ struct reliable_state {
   // Receiving side
   int NEXT_PACKET_EXPECTED;
 
+  int eofSent, eofRecv;
   /* Client */
   int client_state;
 
@@ -171,6 +172,9 @@ rel_create (conn_t *c, const struct sockaddr_storage *ss,
 
   r->NEXT_PACKET_EXPECTED = 1;
 
+  r->eofSent = 0;
+  r->eofRecv = 0;
+
   return r;
 }
 
@@ -262,15 +266,24 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
   }
   else if (len == HEADER_SIZE) {
     // signal to destroy? send eof?
-    rel_destroy(r);
+    uint32_t seqno = ntohl(pkt->seqno);
+    if (seqno == r->NEXT_PACKET_EXPECTED) {
+      struct ack_packet *ack = createAckPacket(r);
+
+      conn_sendpkt(r->c, (packet_t *)ack, ACK_PACKET_SIZE);
+      conn_output(r->c, pkt->data, len - HEADER_SIZE);
+      r->NEXT_PACKET_EXPECTED++;
+      free(ack);
+      // rel_destroy(r);
+    }
   }
   else {
     // holds data that arrives out of order and data that is in correct order, but app hasn't read yet
     // memcpy(r->recvPackets[0]->packet, pkt, sizeof(packet_t));
     // rel_output(r);
     uint32_t seqno = ntohl(pkt->seqno);
-    size_t availableLength = conn_bufspace(r->c);
-    if (seqno == r->NEXT_PACKET_EXPECTED && (len - HEADER_SIZE < availableLength)) {
+    // size_t availableLength = conn_bufspace(r->c);
+    if (seqno == r->NEXT_PACKET_EXPECTED) {
       struct ack_packet *ack = createAckPacket(r);
 
       conn_sendpkt(r->c, (packet_t *)ack, ACK_PACKET_SIZE);
@@ -292,6 +305,11 @@ rel_read (rel_t *s)
     // don't send, window's full
     return;
   }
+
+  if (numPacketsInWindow == 0 && s->eofSent == 1 && s->eofRecv == 1) {
+    rel_destroy(s);
+    return;
+  }
   // can send packet
   char payloadBuffer[MAX_PAYLOAD_SIZE];
 
@@ -300,7 +318,12 @@ rel_read (rel_t *s)
     return; // no data is available at the moment, just return
   }
   else if (bytesReceived == -1) {
-    return; // EOF was received, need to add more to this later
+    s->eofSent = 1;
+    bytesReceived = 0;
+    packet_t *packet = createDataPacket(s, payloadBuffer, bytesReceived);
+    conn_sendpkt(s->c, packet, HEADER_SIZE + bytesReceived);
+    free(packet);
+    return;
   }
   packet_t *packet = createDataPacket(s, payloadBuffer, bytesReceived);
 
@@ -318,7 +341,6 @@ rel_output (rel_t *r)
 {
 
   // TODO: Use conn_bufspace to check if the output buffer is large enough for the received data
-
   conn_output(r->c, r->recvPackets[0]->packet->data,
                 r->recvPackets[0]->packet->len - HEADER_SIZE);
 }

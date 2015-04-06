@@ -72,19 +72,7 @@ verifyChecksum (rel_t *r, packet_t *pkt, size_t n) {
   return 1;
 }
 
-void
-shiftPacketList (rel_t *r, packet_t *pkt) {
-  int shift = 0, i;
-  for (i = 0; i < r->LAST_PACKET_SENT - r->LAST_PACKET_ACKED; i++) {
-    if (pkt->ackno == r->sentPackets[i]->packet->seqno + 1) {
-      shift = 1;
-    }
-    if (shift) {
-      r->sentPackets[i] = r->sentPackets[i + 1];
-    }
-  }
-  return;
-}
+
 
 struct ack_packet *
 createAckPacket (rel_t *r) {
@@ -94,6 +82,7 @@ createAckPacket (rel_t *r) {
   ack->cksum = htons(0);
   ack->len = htons(ACK_PACKET_SIZE);
   ack->ackno = htonl(r->NEXT_PACKET_EXPECTED);
+  r->NEXT_PACKET_EXPECTED++;
 
   return ack;
 }
@@ -218,6 +207,27 @@ rel_demux (const struct config_common *cc,
 }
 
 void
+shiftPacketList (rel_t *r, packet_t *pkt) {
+  int i, shift = 0;
+  int numPacketsInWindow = r->LAST_PACKET_SENT - r->LAST_PACKET_ACKED;
+  for (i = 0; i < numPacketsInWindow; i++) {
+    if (pkt->ackno == r->sentPackets[i]->packet->seqno + 1) {
+      shift = 1;
+    }
+    if (shift) {
+      r->sentPackets[i] = r->sentPackets[i + 1];
+    }
+  }
+  // reset values?
+  // free(r->sentPackets[numPacketsInWindow]->packet);
+  // free(r->sentPackets[numPacketsInWindow]);
+  // r->sentPackets[numPacketsInWindow] = malloc(sizeof(wrapper *));
+  // r->sentPackets[numPacketsInWindow] = malloc(sizeof(packet_t));
+
+  return;
+}
+
+void
 rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
   // TODO: Do we need to check the checksum of the received packet here first???
@@ -227,17 +237,15 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
   pkt->ackno = ntohl(pkt->ackno);
   pkt->seqno = ntohl(pkt->seqno);
 
-  if (!verifyChecksum(r, pkt, n) || 0) {
+  if (!verifyChecksum(r, pkt, n) || pkt->len != n) { // 0 needs to be changed to pkt->len != n
     // Checksum not equal or packet was padded or sustained losses
     return;
   }
 
-  if (n == ACK_PACKET_SIZE) {
-
+  if (pkt->len == ACK_PACKET_SIZE) {
     // TODO: Check for duplicate acks
-
     // ack packet
-    if (1) {
+    if (pkt->ackno == r->LAST_PACKET_ACKED + 1) {
       // this is the expected in order ack number
       r->LAST_PACKET_ACKED++;
 
@@ -250,7 +258,7 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
       // packets preceding this were dropped
     }
   }
-  else if (n == HEADER_SIZE) {
+  else if (pkt->len == HEADER_SIZE) {
     // signal to destroy? send eof?
     rel_destroy(r);
   }
@@ -261,11 +269,9 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
     rel_output(r);
 
     if (pkt->seqno == r->NEXT_PACKET_EXPECTED) {
-      r->NEXT_PACKET_EXPECTED++;
-      
       struct ack_packet *ack = createAckPacket(r);
 
-      conn_sendpkt(r->c, (packet_t *)&ack, ACK_PACKET_SIZE);
+      conn_sendpkt(r->c, (packet_t *)ack, ACK_PACKET_SIZE);
 
       free(ack);
     }

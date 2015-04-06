@@ -69,6 +69,15 @@ rel_t *rel_list;
 
 int
 verifyChecksum (rel_t *r, packet_t *pkt, size_t n) {
+  uint16_t checksum = pkt->cksum;
+  uint16_t len = ntohs(pkt->len);
+
+  pkt->cksum = 0;
+  if ((len > HEADER_SIZE + MAX_PAYLOAD_SIZE) || (cksum(pkt, len) != checksum)) {
+    pkt->cksum = checksum;
+    return 0;
+  }
+  pkt->cksum = checksum;
   return 1;
 }
 
@@ -79,10 +88,10 @@ createAckPacket (rel_t *r) {
   struct ack_packet *ack;
   ack = malloc(sizeof(*ack));
 
-  ack->cksum = htons(0);
+  ack->cksum = 0;
   ack->len = htons(ACK_PACKET_SIZE);
-  ack->ackno = htonl(r->NEXT_PACKET_EXPECTED);
-  r->NEXT_PACKET_EXPECTED++;
+  ack->ackno = htonl(r->NEXT_PACKET_EXPECTED + 1);
+  ack->cksum = cksum(&ack, ACK_PACKET_SIZE);
 
   return ack;
 }
@@ -106,10 +115,11 @@ createDataPacket (rel_t *r, char *payload, int bytesReceived) {
   packet = malloc(sizeof(*packet));
 
   memcpy(packet->data, payload, bytesReceived);
-  packet->cksum = htons(0);
+  packet->cksum = 0;
   packet->len = htons(HEADER_SIZE + bytesReceived);
   packet->ackno = htonl(r->NEXT_PACKET_EXPECTED);
   packet->seqno = htonl(r->LAST_PACKET_SENT + 1);
+  packet->cksum = cksum(&packet, HEADER_SIZE + bytesReceived);
 
   return packet;
 }
@@ -219,10 +229,10 @@ shiftPacketList (rel_t *r, packet_t *pkt) {
     }
   }
   // reset values?
-  // free(r->sentPackets[numPacketsInWindow]->packet);
-  // free(r->sentPackets[numPacketsInWindow]);
-  // r->sentPackets[numPacketsInWindow] = malloc(sizeof(wrapper *));
-  // r->sentPackets[numPacketsInWindow] = malloc(sizeof(packet_t));
+  free(r->sentPackets[numPacketsInWindow]->packet);
+  free(r->sentPackets[numPacketsInWindow]);
+  r->sentPackets[numPacketsInWindow] = malloc(sizeof(wrapper *));
+  r->sentPackets[numPacketsInWindow]->packet = malloc(sizeof(packet_t));
 
   return;
 }
@@ -231,26 +241,22 @@ void
 rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
   // TODO: Do we need to check the checksum of the received packet here first???
-
-  pkt->len = ntohs(pkt->len);
-  pkt->cksum = ntohs(pkt->cksum);
-  pkt->ackno = ntohl(pkt->ackno);
-  pkt->seqno = ntohl(pkt->seqno);
-
-  if (!verifyChecksum(r, pkt, n) || pkt->len != n) { // 0 needs to be changed to pkt->len != n
+  uint16_t len = ntohs(pkt->len);
+  uint32_t ackno = ntohl(pkt->ackno);
+  if (!verifyChecksum(r, pkt, n) || (len != n)) { // 0 needs to be changed to pkt->len != n
     // Checksum not equal or packet was padded or sustained losses
     return;
   }
 
-  if (pkt->len == ACK_PACKET_SIZE) {
+  if (len == ACK_PACKET_SIZE) {
     // TODO: Check for duplicate acks
     // ack packet
-    if (pkt->ackno == r->LAST_PACKET_ACKED + 1) {
+    if (ackno == r->LAST_PACKET_SENT) { // Should be changed to LAST_PACKET_ACKED + 1 later?
       // this is the expected in order ack number
       r->LAST_PACKET_ACKED++;
 
       // "delete" previous value
-      shiftPacketList(r, pkt); // Probably not correct
+      // shiftPacketList(r, pkt);
 
       rel_read(r);
     }
@@ -258,21 +264,25 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
       // packets preceding this were dropped
     }
   }
-  else if (pkt->len == HEADER_SIZE) {
+  else if (len == HEADER_SIZE) {
     // signal to destroy? send eof?
     rel_destroy(r);
   }
   else {
     // data packet, conn_output if possible, write to buffer otherwise?
     // holds data that arrives out of order and data that is in correct order, but app hasn't read yet
-    memcpy(r->recvPackets[0]->packet, pkt, sizeof(packet_t));
-    rel_output(r);
+    // memcpy(r->recvPackets[0]->packet, pkt, sizeof(packet_t));
+    // rel_output(r);
 
-    if (pkt->seqno == r->NEXT_PACKET_EXPECTED) {
+    uint32_t seqno = ntohl(pkt->seqno);
+    conn_output(r->c, pkt->data, len - HEADER_SIZE);
+
+    if (seqno == r->NEXT_PACKET_EXPECTED) {
       struct ack_packet *ack = createAckPacket(r);
 
       conn_sendpkt(r->c, (packet_t *)ack, ACK_PACKET_SIZE);
 
+      r->NEXT_PACKET_EXPECTED++;
       free(ack);
     }
     else {

@@ -386,7 +386,6 @@ rel_timer ()
   uint32_t curTime = getCurrentTime();
   
   while (r != NULL) {
-    printf("HERE\n");
     int numPacketsInWindow = r->LAST_PACKET_SENT - r->LAST_PACKET_ACKED;
     int i;
     for (i = 0; i < numPacketsInWindow; i++) {
@@ -396,9 +395,10 @@ rel_timer ()
         // retransmit package
         // retransmitPacket(r->sentPackets[i]);
         printf("RETRANSMITTING\n");
-        // TODO: Implement movePacketToTail to move original packet to the end of sentPackets
+        // Move original packet to the end of sentPackets
         movePacketToTail(i, r, curPacketNode);
         conn_sendpkt(r->c, curPacketNode->packet, ntohs(curPacketNode->packet->len));
+        fprintf(stderr, "numpackets: %d retransmitted packet: %s\n", numPacketsInWindow, curPacketNode->packet->data);
       }
     }
     r = r->next;

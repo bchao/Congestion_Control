@@ -33,7 +33,6 @@
 typedef struct packetWrapper {
   packet_t *packet;
   uint32_t sentTime;
-  int acked;
 } wrapper;
 
 struct reliable_state {
@@ -81,8 +80,6 @@ verifyChecksum (rel_t *r, packet_t *pkt, size_t n) {
   return 1;
 }
 
-
-
 struct ack_packet *
 createAckPacket (rel_t *r) {
   struct ack_packet *ack;
@@ -91,8 +88,7 @@ createAckPacket (rel_t *r) {
   ack->cksum = 0;
   ack->len = htons(ACK_PACKET_SIZE);
   ack->ackno = htonl(r->NEXT_PACKET_EXPECTED + 1);
-  ack->cksum = cksum(&ack, ACK_PACKET_SIZE);
-
+  ack->cksum = cksum(ack, ACK_PACKET_SIZE);
   return ack;
 }
 
@@ -119,7 +115,7 @@ createDataPacket (rel_t *r, char *payload, int bytesReceived) {
   packet->len = htons(HEADER_SIZE + bytesReceived);
   packet->ackno = htonl(r->NEXT_PACKET_EXPECTED);
   packet->seqno = htonl(r->LAST_PACKET_SENT + 1);
-  packet->cksum = cksum(&packet, HEADER_SIZE + bytesReceived);
+  packet->cksum = cksum(packet, HEADER_SIZE + bytesReceived);
 
   return packet;
 }
@@ -243,19 +239,20 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
   uint16_t len = ntohs(pkt->len);
   uint32_t ackno = ntohl(pkt->ackno);
 
-  if (!verifyChecksum(r, pkt, n) || (len != n)) {
+  int verified = verifyChecksum(r, pkt, n);
+  if (!verified || (len != n)) {
     return;
   }
 
   if (len == ACK_PACKET_SIZE) {
     // TODO: Check for duplicate acks
     // ack packet
-    if (ackno == r->LAST_PACKET_SENT) { // Should be changed to LAST_PACKET_ACKED + 1 later?
+    if (ackno == r->LAST_PACKET_SENT + 1) { // Should be changed to LAST_PACKET_ACKED + 1 later?
       // this is the expected in order ack number
       r->LAST_PACKET_ACKED++;
 
       // "delete" previous value
-      // shiftPacketList(r, pkt);
+      shiftPacketList(r, pkt);
 
       rel_read(r);
     }
@@ -268,19 +265,16 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
     rel_destroy(r);
   }
   else {
-    // data packet, conn_output if possible, write to buffer otherwise?
     // holds data that arrives out of order and data that is in correct order, but app hasn't read yet
     // memcpy(r->recvPackets[0]->packet, pkt, sizeof(packet_t));
     // rel_output(r);
-
     uint32_t seqno = ntohl(pkt->seqno);
-    conn_output(r->c, pkt->data, len - HEADER_SIZE);
-
     if (seqno == r->NEXT_PACKET_EXPECTED) {
       struct ack_packet *ack = createAckPacket(r);
 
       conn_sendpkt(r->c, (packet_t *)ack, ACK_PACKET_SIZE);
 
+      conn_output(r->c, pkt->data, len - HEADER_SIZE);
       r->NEXT_PACKET_EXPECTED++;
       free(ack);
     }
@@ -313,9 +307,9 @@ rel_read (rel_t *s)
   // Save packet until it's acked/in case it needs to be retransmitted
   memcpy(s->sentPackets[numPacketsInWindow]->packet, &packet, HEADER_SIZE + bytesReceived);
   s->sentPackets[numPacketsInWindow]->sentTime = getCurrentTime();
-  s->sentPackets[numPacketsInWindow]->acked = 0;
-  conn_sendpkt(s->c, packet, HEADER_SIZE + bytesReceived);
+
   s->LAST_PACKET_SENT++;
+  conn_sendpkt(s->c, packet, HEADER_SIZE + bytesReceived);
   free(packet);
 }
 
@@ -333,20 +327,20 @@ void
 rel_timer ()
 {
   /* Retransmit any packets that need to be retransmitted */
-  rel_t *r = rel_list;
+  // rel_t *r = rel_list;
 
-  while (r != NULL) {
-    int numPacketsInWindow = r->LAST_PACKET_SENT - r->LAST_PACKET_ACKED;
-    int i;
-    for (i = 0; i < numPacketsInWindow; i++) {
-      int curTime = getCurrentTime();
-      if ((curTime - r->sentPackets[i]->sentTime > r->timeout) && r->sentPackets[i]->acked == 0) {
-        // retransmit package
-        // retransmitPacket(r->sentPackets[i]);
-        conn_sendpkt(r->c, r->sentPackets[i]->packet, HEADER_SIZE + r->sentPackets[i]->packet->len);
-      }
-      // r->sentPackets[i];
-    }
-    r = r->next;
-  }
+  // while (r != NULL) {
+  //   int numPacketsInWindow = r->LAST_PACKET_SENT - r->LAST_PACKET_ACKED;
+  //   int i;
+  //   for (i = 0; i < numPacketsInWindow; i++) {
+  //     int curTime = getCurrentTime();
+  //     if (curTime - r->sentPackets[i]->sentTime > r->timeout) {
+  //       // retransmit package
+  //       // retransmitPacket(r->sentPackets[i]);
+  //       conn_sendpkt(r->c, r->sentPackets[i]->packet, HEADER_SIZE + r->sentPackets[i]->packet->len);
+  //     }
+  //     // r->sentPackets[i];
+  //   }
+  //   r = r->next;
+  // }
 }

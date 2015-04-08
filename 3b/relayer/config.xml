@@ -21,23 +21,23 @@
 <pairs>
   <pair>
    <sender>
-     <src>linux21:10000</src>
-     <dst>linux25:50001</dst>
+     <src>localhost:10000</src>
+     <dst>localhost:50001</dst>
    </sender>
    <receiver>
-     <src>linux22:20000</src>
-     <dst>linux25:50002</dst>
+     <src>localhost:20000</src>
+     <dst>localhost:50002</dst>
    </receiver>
   </pair>
 
   <pair>
    <sender>
-     <src>linux23:30000</src>
-     <dst>linux25:50003</dst>
+     <src>localhost:30000</src>
+     <dst>localhost:50003</dst>
    </sender>
    <receiver>
-     <src>linux24:40000</src>
-     <dst>linux25:50004</dst>
+     <src>localhost:40000</src>
+     <dst>localhost:50004</dst>
    </receiver>
   </pair>
 

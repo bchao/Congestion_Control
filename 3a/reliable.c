@@ -68,17 +68,6 @@ struct reliable_state {
 };
 rel_t *rel_list;
 
-void
-movePacketToTail (int position, rel_t *r, wrapper *curPacketNode) {
-  int numPacketsInWindow = r->LAST_PACKET_SENT - r->LAST_PACKET_ACKED;
-  int i;
-  for (i = position; i < numPacketsInWindow - 1; i++) {
-    r->sentPackets[i] = r->sentPackets[i+1];
-  }
-  r->sentPackets[numPacketsInWindow - 1] = curPacketNode;
-  return;
-}
-
 int
 verifyChecksum (rel_t *r, packet_t *pkt, size_t n) {
   uint16_t checksum = pkt->cksum;
@@ -111,11 +100,6 @@ getCurrentTime () { // Returns time in ms since epoch
   gettimeofday(&tv, NULL);
   uint32_t ms = (tv.tv_sec * 1000) + (tv.tv_usec / 1000);
   return ms;
-}
-
-void
-retransmitPacket (wrapper *pW) {
-  return;
 }
 
 packet_t *
@@ -236,9 +220,9 @@ shiftRecvPacketList(rel_t *r) {
   int i, shift;
   int numPacketsInWindow = r->LAST_PACKET_SENT - r->LAST_PACKET_ACKED;
 
-  // fprintf(stderr, "Shift recv numpackets: %d\n", numPacketsInWindow);
+  fprintf(stderr, "Shift recv numpackets: %d\n", numPacketsInWindow);
 
-  for (shift = 0; shift < numPacketsInWindow; shift++) {
+  for (shift = 0; shift < r->windowSize; shift++) {
     if (r->recvPackets[shift]->acked != 0) {
       break;
     }
@@ -246,7 +230,7 @@ shiftRecvPacketList(rel_t *r) {
 
   // fprintf(stderr, "shift recv shift offset: %d\n", shift);
 
-  for (i = 0; i < numPacketsInWindow - shift; i++) {
+  for (i = 0; i < r->windowSize - shift; i++) {
 
     wrapper *prev_wrap = r->recvPackets[i];
     if (prev_wrap->acked == 0) {
@@ -258,7 +242,7 @@ shiftRecvPacketList(rel_t *r) {
   }
 
   int j;
-  for (j = numPacketsInWindow - shift; j < numPacketsInWindow; j++) {
+  for (j = r->windowSize - shift; j < r->windowSize; j++) {
     free(r->recvPackets[j]->packet);
     free(r->recvPackets[j]);
     r->recvPackets[j] = malloc(sizeof(wrapper));
@@ -494,9 +478,6 @@ rel_timer ()
       if (curTime - curPacketNode->sentTime > r->timeout) {
         fprintf(stderr, "Retransmitted packet w/ sequence number: %d\n", ntohl(curPacketNode->packet->seqno));
         // retransmit package
-        // retransmitPacket(r->sentPackets[i]);
-        // Move original packet to the end of sentPackets, why do we need this again??
-        // movePacketToTail(i, r, curPacketNode);
         conn_sendpkt(r->c, curPacketNode->packet, ntohs(curPacketNode->packet->len));
       }
     }

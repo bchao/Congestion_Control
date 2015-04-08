@@ -239,7 +239,7 @@ shiftRecvPacketList(rel_t *r) {
   // fprintf(stderr, "Shift recv numpackets: %d\n", numPacketsInWindow);
 
   for (shift = 0; shift < numPacketsInWindow; shift++) {
-    if (r->recvPackets[shift]->acked == 1) {
+    if (r->recvPackets[shift]->acked != 0) {
       break;
     }
   }
@@ -247,7 +247,11 @@ shiftRecvPacketList(rel_t *r) {
   // fprintf(stderr, "shift recv shift offset: %d\n", shift);
 
   for (i = 0; i < numPacketsInWindow - shift; i++) {
+
     wrapper *prev_wrap = r->recvPackets[i];
+    if (prev_wrap->acked == 0) {
+      break;
+    }
     wrapper *new_wrap = r->recvPackets[i+shift];
     memcpy(prev_wrap->packet, new_wrap->packet, sizeof(packet_t));
     prev_wrap->acked = 1;
@@ -273,6 +277,11 @@ shiftSentPacketList (rel_t *r, int ackno) {
   for (i = 0; i < numPacketsInWindow - shift; i++) {
     wrapper *prev_wrap = r->sentPackets[i];
     wrapper *new_wrap = r->sentPackets[i+shift];
+
+    if(new_wrap->acked == 0) {
+      prev_wrap->acked = 0;
+      break;
+    }
     memcpy(prev_wrap->packet, new_wrap->packet, sizeof(packet_t));
     prev_wrap->acked = new_wrap->acked;
     prev_wrap->sentTime = new_wrap->sentTime;
@@ -325,10 +334,10 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
     // fprintf(stderr, "Received data: %s\n", pkt->data);
 
 
-    if (seqno > r->NEXT_PACKET_EXPECTED) {
-      // Ghetto fix
-      return;
-    }
+    // if (seqno > r->NEXT_PACKET_EXPECTED) {
+    //   // Ghetto fix
+    //   return;
+    // }
 
     if (seqno < r->NEXT_PACKET_EXPECTED) { // duplicate packet
       fprintf(stderr, "Received duplicate packet w/ sequence number: %d\n", seqno);
@@ -345,6 +354,7 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
     fprintf(stderr, "Received sequence number: %d\n", seqno);
 
     int slot = seqno - r->NEXT_PACKET_EXPECTED;
+    fprintf(stderr, "RecvPacket slot number: %d\n", slot);
     memcpy(r->recvPackets[slot]->packet, pkt, sizeof(packet_t));
     r->recvPackets[slot]->sentTime = getCurrentTime();
     r->recvPackets[slot]->acked = 1;
@@ -368,6 +378,7 @@ void
 rel_read (rel_t *s)
 {
   int numPacketsInWindow = s->LAST_PACKET_SENT - s->LAST_PACKET_ACKED;
+  fprintf(stderr, "REL_READ -- lastpacketsent: %d, lastacked: %d\n", s->LAST_PACKET_SENT, s->LAST_PACKET_ACKED);
 
   if (numPacketsInWindow == 0 && s->eofSent == 1 && s->eofRecv == 1) {
     rel_destroy(s);
@@ -411,7 +422,7 @@ rel_read (rel_t *s)
   // fprintf(stderr, "Slot: %d\n", slot);
   memcpy(s->sentPackets[slot]->packet, packet, HEADER_SIZE + bytesReceived);
   s->sentPackets[slot]->sentTime = getCurrentTime();
-  s->sentPackets[slot]->acked = 0;
+  s->sentPackets[slot]->acked = 1;
 
   fprintf(stderr, "%s\n", "====================SENDING PACKET================");
   // fprintf(stderr, "Packet data: %s\n", packet->data);
@@ -424,9 +435,10 @@ rel_output (rel_t *r)
 {
   int numPacketsInWindow = r->LAST_PACKET_SENT - r->LAST_PACKET_ACKED;
   int i;
-
+  fprintf(stderr, "lastpacksent: %d, lackPackacked: %d\n", r->LAST_PACKET_SENT, r->LAST_PACKET_ACKED);
   for (i = 0; i < r->windowSize; i++) {
-    if(r->recvPackets[i]->acked != 1) {
+    fprintf(stderr, "Recvpacket of %d has ack %d\n", i, r->recvPackets[i]->acked);
+    if(r->recvPackets[i]->acked == 0) {
       break;
     }
     packet_t *pkt = r->recvPackets[i]->packet;
@@ -437,6 +449,7 @@ rel_output (rel_t *r)
       if(packet_len == HEADER_SIZE) {
         r->eofRecv = 1;
       }
+      fprintf(stderr, "Outputting packet %d from recvPackets \n", i);
       conn_output(r->c, pkt->data, packet_len - HEADER_SIZE);
       r->recvPackets[i]->acked = 0;
     } 
@@ -445,7 +458,7 @@ rel_output (rel_t *r)
     }
   }
 
-  // fprintf(stderr, "value of i: %d\n", i);
+  fprintf(stderr, "value of i: %d\n", i);
   fprintf(stderr, "Next Packet Expected Before: %d\n", r->NEXT_PACKET_EXPECTED );
 
   r->NEXT_PACKET_EXPECTED += i;

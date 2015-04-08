@@ -26,17 +26,15 @@
 #define SERVER_WAITING_FLUSH 1
 #define SERVER_DONE 2
 
-#define MAX_PAYLOAD_SIZE 500
-#define HEADER_SIZE 12
-#define ACK_PACKET_SIZE 8
-
+#define MAX_PAYLOAD_SIZE 1000
+#define HEADER_SIZE 16
+#define ACK_PACKET_SIZE 12
 
 typedef struct packetWrapper {
   packet_t *packet;
   uint32_t sentTime;
   int acked;
 } wrapper;
-
 
 struct reliable_state {
 
@@ -226,9 +224,9 @@ shiftRecvPacketList(rel_t *r) {
   int i, shift;
   int numPacketsInWindow = r->LAST_PACKET_SENT - r->LAST_PACKET_ACKED;
 
-  // fprintf(stderr, "Shift recv numpackets: %d\n", numPacketsInWindow);
+  fprintf(stderr, "Shift recv numpackets: %d\n", numPacketsInWindow);
 
-  for (shift = 0; shift < numPacketsInWindow; shift++) {
+  for (shift = 0; shift < r->windowSize; shift++) {
     if (r->recvPackets[shift]->acked != 0) {
       break;
     }
@@ -236,7 +234,7 @@ shiftRecvPacketList(rel_t *r) {
 
   // fprintf(stderr, "shift recv shift offset: %d\n", shift);
 
-  for (i = 0; i < numPacketsInWindow - shift; i++) {
+  for (i = 0; i < r->windowSize - shift; i++) {
 
     wrapper *prev_wrap = r->recvPackets[i];
     if (prev_wrap->acked == 0) {
@@ -248,7 +246,7 @@ shiftRecvPacketList(rel_t *r) {
   }
 
   int j;
-  for (j = numPacketsInWindow - shift; j < numPacketsInWindow; j++) {
+  for (j = r->windowSize - shift; j < r->windowSize; j++) {
     free(r->recvPackets[j]->packet);
     free(r->recvPackets[j]);
     r->recvPackets[j] = malloc(sizeof(wrapper));
@@ -323,6 +321,8 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
     fprintf(stderr, "%s\n", "======================RECEIVED DATA PACKET=========================");
     uint32_t seqno = ntohl(pkt->seqno);
 
+    fprintf(stderr, "Received Data: %s\n", pkt->data);
+
     // fprintf(stderr, "Received data: %s\n", pkt->data);
 
 
@@ -385,24 +385,28 @@ rel_read (rel_t *s)
   if(s->c->sender_receiver == RECEIVER)
   {
     // if already sent eof to the sender/not first call
-    if(s->eofSent) {
-      return;
-    }
-    else {
-      // first call
-      // set eofSent to 1
-      s->eofSent = 1;
 
-      // send eof
+    return;
+    // if(s->eofSent) {
+    //   return;
+    // }
+    // else {
+    //   // first call
+    //   // set eofSent to 1
+    //   s->eofSent = 1;
 
-      char payloadBuffer[MAX_PAYLOAD_SIZE];
+    //   // send eof
 
-      int bytesReceived = 0;
+    //   char payloadBuffer[MAX_PAYLOAD_SIZE];
 
-      packet_t *packet = createDataPacket(s, payloadBuffer, bytesReceived);
-      conn_sendpkt(s->c, packet, HEADER_SIZE + bytesReceived);
-      free(packet);
-    }
+    //   int bytesReceived = 0;
+
+    //   packet_t *packet = createDataPacket(s, payloadBuffer, bytesReceived);
+    //   conn_sendpkt(s->c, packet, HEADER_SIZE + bytesReceived);
+    //   free(packet);
+    // }
+
+
     //if already sent EOF to the sender
     //  return;
     //else
@@ -427,6 +431,8 @@ rel_read (rel_t *s)
     // can send packet
     char payloadBuffer[MAX_PAYLOAD_SIZE];
 
+    memset(payloadBuffer, 0, MAX_PAYLOAD_SIZE);
+
     int bytesReceived = conn_input(s->c, payloadBuffer, MAX_PAYLOAD_SIZE);
     if (bytesReceived == 0) {
       return; // no data is available at the moment, just return
@@ -449,6 +455,11 @@ rel_read (rel_t *s)
     packet_t *packet = createDataPacket(s, payloadBuffer, bytesReceived);
     s->LAST_PACKET_SENT++;
     fprintf(stderr, "Sent sequence number: %d\n", ntohl(packet->seqno));
+
+    // fprintf(stderr, "PACKET INFO: %s\n", packet->data);
+
+    fprintf(stderr, "PACKET INFO: %s\n", strdup(payloadBuffer));
+    fprintf(stderr, "String Compare Value: %d\n", strcmp(packet->data, ""));
     conn_sendpkt(s->c, packet, HEADER_SIZE + bytesReceived);
 
     // Save packet until it's acked/in case it needs to be retransmitted

@@ -34,6 +34,7 @@
 typedef struct packetWrapper {
   packet_t *packet;
   uint32_t sentTime;
+  int acked;
 } wrapper;
 
 
@@ -74,17 +75,6 @@ struct reliable_state {
 };
 rel_t *rel_list;
 
-void
-movePacketToTail (int position, rel_t *r, wrapper *curPacketNode) {
-  int numPacketsInWindow = r->LAST_PACKET_SENT - r->LAST_PACKET_ACKED;
-  int i;
-  for (i = position; i < numPacketsInWindow - 1; i++) {
-    r->sentPackets[i] = r->sentPackets[i+1];
-  }
-  r->sentPackets[numPacketsInWindow - 1] = curPacketNode;
-  return;
-}
-
 int
 verifyChecksum (rel_t *r, packet_t *pkt, size_t n) {
   uint16_t checksum = pkt->cksum;
@@ -100,7 +90,7 @@ verifyChecksum (rel_t *r, packet_t *pkt, size_t n) {
 }
 
 struct ack_packet *
-createAckPacket (rel_t *r, uint32_t ackno) {
+createAckPacket (rel_t *r, int ackno) {
   struct ack_packet *ack;
   ack = malloc(sizeof(*ack));
 
@@ -129,6 +119,7 @@ createDataPacket (rel_t *r, char *payload, int bytesReceived) {
   packet_t *packet;
   packet = malloc(sizeof(*packet));
 
+  memset(packet->data, 0, MAX_PAYLOAD_SIZE);
   memcpy(packet->data, payload, bytesReceived);
   packet->cksum = 0;
   packet->len = htons(HEADER_SIZE + bytesReceived);
@@ -182,8 +173,10 @@ rel_create (conn_t *c, const struct sockaddr_storage *ss,
   for (i = 0; i < r->windowSize; i++) {
     r->sentPackets[i] = malloc(sizeof(wrapper));
     r->sentPackets[i]->packet = malloc(sizeof(packet_t));
+    r->sentPackets[i]->acked = 0;
     r->recvPackets[i] = malloc(sizeof(wrapper));
     r->recvPackets[i]->packet = malloc(sizeof(packet_t));
+    r->recvPackets[i]->acked = 0;
   }
 
   r->LAST_PACKET_ACKED = 0;
@@ -229,23 +222,71 @@ rel_demux (const struct config_common *cc,
 }
 
 void
-shiftPacketList (rel_t *r, packet_t *pkt) {
-  int i, shift = 0;
+shiftRecvPacketList(rel_t *r) {
+  int i, shift;
   int numPacketsInWindow = r->LAST_PACKET_SENT - r->LAST_PACKET_ACKED;
-  for (i = 0; i < numPacketsInWindow; i++) {
-    if (pkt->ackno == r->sentPackets[i]->packet->seqno + 1) {
-      shift = 1;
-    }
-    if (shift) {
-      r->sentPackets[i] = r->sentPackets[i + 1];
+
+  // fprintf(stderr, "Shift recv numpackets: %d\n", numPacketsInWindow);
+
+  for (shift = 0; shift < numPacketsInWindow; shift++) {
+    if (r->recvPackets[shift]->acked != 0) {
+      break;
     }
   }
-  // reset values?
-  free(r->sentPackets[numPacketsInWindow]->packet);
-  free(r->sentPackets[numPacketsInWindow]);
-  r->sentPackets[numPacketsInWindow] = malloc(sizeof(wrapper));
-  r->sentPackets[numPacketsInWindow]->packet = malloc(sizeof(packet_t));
 
+  // fprintf(stderr, "shift recv shift offset: %d\n", shift);
+
+  for (i = 0; i < numPacketsInWindow - shift; i++) {
+
+    wrapper *prev_wrap = r->recvPackets[i];
+    if (prev_wrap->acked == 0) {
+      break;
+    }
+    wrapper *new_wrap = r->recvPackets[i+shift];
+    memcpy(prev_wrap->packet, new_wrap->packet, sizeof(packet_t));
+    prev_wrap->acked = 1;
+  }
+
+  int j;
+  for (j = numPacketsInWindow - shift; j < numPacketsInWindow; j++) {
+    free(r->recvPackets[j]->packet);
+    free(r->recvPackets[j]);
+    r->recvPackets[j] = malloc(sizeof(wrapper));
+    r->recvPackets[j]->packet = malloc(sizeof(packet_t));
+    r->recvPackets[j]->acked = 0;
+    r->recvPackets[j]->sentTime = 0;
+  }
+}
+
+void
+shiftSentPacketList (rel_t *r, int ackno) {
+  int shift = ackno - r->LAST_PACKET_ACKED - 1;
+  int numPacketsInWindow = r->LAST_PACKET_SENT - r->LAST_PACKET_ACKED;
+
+  int i;
+  for (i = 0; i < numPacketsInWindow - shift; i++) {
+    wrapper *prev_wrap = r->sentPackets[i];
+    wrapper *new_wrap = r->sentPackets[i+shift];
+
+    if(new_wrap->acked == 0) {
+      prev_wrap->acked = 0;
+      break;
+    }
+    memcpy(prev_wrap->packet, new_wrap->packet, sizeof(packet_t));
+    prev_wrap->acked = new_wrap->acked;
+    prev_wrap->sentTime = new_wrap->sentTime;
+  }
+
+  // Clear values for shifted entries of at end of array
+  int j;
+  for (j = numPacketsInWindow - shift; j < numPacketsInWindow; j++) {
+    free(r->sentPackets[j]->packet);
+    free(r->sentPackets[j]);
+    r->sentPackets[j] = malloc(sizeof(wrapper));
+    r->sentPackets[j]->packet = malloc(sizeof(packet_t));
+    r->sentPackets[j]->acked = 0;
+    r->sentPackets[j]->sentTime = 0;
+  }
   return;
 }
 
@@ -257,73 +298,71 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
   uint32_t ackno = ntohl(pkt->ackno);
 
   int verified = verifyChecksum(r, pkt, n);
-  if (!verified || (len != n)) { // drop packets with bad length
+  if (!verified || (len != n)) { // Drop packets with bad length
+    fprintf(stderr, "Packet w/ sequence number %d dropped\n", ntohl(pkt->seqno));
     return;
   }
 
-  if (len == ACK_PACKET_SIZE) { // ack packet
-    if (ackno <= r->LAST_PACKET_ACKED + 1) { //duplicate ack
+  if (len == ACK_PACKET_SIZE) { // Received packet is an ack packet
+    fprintf(stderr, "Received ack number: %d\n", ackno);
+    fprintf(stderr, "%s\n", "======================RECEIVED ACK  PACKET=========================");
+    if (ackno <= r->LAST_PACKET_ACKED + 1) { // Drop duplicate acks
+      fprintf(stderr, "Duplicate ack: %d received\n", ackno);
       return;
     }
-    // ack packet
-    if (ackno == r->LAST_PACKET_SENT + 1) { // Should be changed to LAST_PACKET_ACKED + 1 later?
-      // this is the expected in order ack number
-      r->LAST_PACKET_ACKED++;
 
-      // "delete" previous value
-      shiftPacketList(r, pkt);
+    //if (ackno == r->LAST_PACKET_SENT + 1) { // REMOVE THIS AFTER WE FIX ACK SENDING!!!!
+      shiftSentPacketList(r, ackno);
+
+      r->LAST_PACKET_ACKED = ackno - 1;
 
       rel_read(r);
-    }
-    else {
-      // packets preceding this were dropped
-    }
-  }
-  else if (len == HEADER_SIZE) { // eof condition, destroy??
-    // signal to destroy? send eof?
-    uint32_t seqno = ntohl(pkt->seqno);
-    if (seqno == r->NEXT_PACKET_EXPECTED) {
-      struct ack_packet *ack = createAckPacket(r, r->NEXT_PACKET_EXPECTED + 1);
-
-      conn_sendpkt(r->c, (packet_t *)ack, ACK_PACKET_SIZE);
-      conn_output(r->c, pkt->data, len - HEADER_SIZE);
-      r->NEXT_PACKET_EXPECTED++;
-      free(ack);
-      // rel_destroy(r);
-    } 
+    //}
   }
   else { // data packet
+    fprintf(stderr, "%s\n", "======================RECEIVED DATA PACKET=========================");
     uint32_t seqno = ntohl(pkt->seqno);
 
-    // if (seqno - r->NEXT_PACKET_EXPECTED > r->windowSize) { // packet outside window
+    // fprintf(stderr, "Received data: %s\n", pkt->data);
+
+
+    // if (seqno > r->NEXT_PACKET_EXPECTED) {
+    //   // Ghetto fix
     //   return;
     // }
+
     if (seqno < r->NEXT_PACKET_EXPECTED) { // duplicate packet
+      fprintf(stderr, "Received duplicate packet w/ sequence number: %d\n", seqno);
       struct ack_packet *ack = createAckPacket(r, r->NEXT_PACKET_EXPECTED);
       conn_sendpkt(r->c, (packet_t *)ack, ACK_PACKET_SIZE);
+      free(ack);
       return;
     }
-    // holds data that arrives out of order and data that is in correct order, but app hasn't read yet
-    // memcpy(r->recvPackets[0]->packet, pkt, sizeof(packet_t));
-    // rel_output(r);
 
-    // size_t availableLength = conn_bufspace(r->c);
-    if (seqno == r->NEXT_PACKET_EXPECTED) {
-      struct ack_packet *ack = createAckPacket(r, r->NEXT_PACKET_EXPECTED + 1);
-
-      conn_sendpkt(r->c, (packet_t *)ack, ACK_PACKET_SIZE);
-      conn_output(r->c, pkt->data, len - HEADER_SIZE);
-      // rel_output(r);
-      r->NEXT_PACKET_EXPECTED++;
-      free(ack);
+    if (seqno - r->NEXT_PACKET_EXPECTED > r->windowSize) {  // Packet outside window
+      return;
     }
-    else {
-      // store in buffer
 
-      // int slot = seqno - r->NEXT_PACKET_EXPECTED + 1;
-      // memcpy(r->recvPackets[slot]->packet, pkt, sizeof(packet_t));
-      // r->recvPackets[slot]->sentTime = getCurrentTime();
-    }
+    fprintf(stderr, "Received sequence number: %d\n", seqno);
+
+    int slot = seqno - r->NEXT_PACKET_EXPECTED;
+    fprintf(stderr, "RecvPacket slot number: %d\n", slot);
+    memcpy(r->recvPackets[slot]->packet, pkt, sizeof(packet_t));
+    r->recvPackets[slot]->sentTime = getCurrentTime();
+    r->recvPackets[slot]->acked = 1;
+
+    rel_output(r);
+
+    // if (seqno == r->NEXT_PACKET_EXPECTED) {
+    //   struct ack_packet *ack = createAckPacket(r, r->NEXT_PACKET_EXPECTED + 1);
+
+    //   conn_sendpkt(r->c, (packet_t *)ack, ACK_PACKET_SIZE);
+    //   conn_output(r->c, pkt->data, len - HEADER_SIZE);
+    //   // rel_output(r);
+    //   r->NEXT_PACKET_EXPECTED++;
+    //   free(ack);
+    // }
+
   }
 }
 
@@ -373,13 +412,15 @@ rel_read (rel_t *s)
   {
     //same logic as lab 1
     int numPacketsInWindow = s->LAST_PACKET_SENT - s->LAST_PACKET_ACKED;
-    if (numPacketsInWindow >= s->windowSize || s->eofSent) {
-      // don't send, window's full, waiting for acks
-      return;
-    }
+    fprintf(stderr, "REL_READ -- lastpacketsent: %d, lastacked: %d\n", s->LAST_PACKET_SENT, s->LAST_PACKET_ACKED);
 
     if (numPacketsInWindow == 0 && s->eofSent == 1 && s->eofRecv == 1) {
       rel_destroy(s);
+      return;
+    }
+
+    if (numPacketsInWindow >= s->windowSize || s->eofSent) {
+      // don't send, window's full, waiting for acks
       return;
     }
 
@@ -396,21 +437,30 @@ rel_read (rel_t *s)
 
       // Why do we need to create and send a packet here?
 
-      packet_t *packet = createDataPacket(s, payloadBuffer, bytesReceived);
-      conn_sendpkt(s->c, packet, HEADER_SIZE + bytesReceived);
-      free(packet);
-      return;
+      // packet_t *packet = createDataPacket(s, payloadBuffer, bytesReceived);
+      // conn_sendpkt(s->c, packet, HEADER_SIZE + bytesReceived);
+
+      // free(packet);
+      // return;
     }
 
     // TODO: Need to handle overflow bytes here as well
 
     packet_t *packet = createDataPacket(s, payloadBuffer, bytesReceived);
-    // Save packet until it's acked/in case it needs to be retransmitted
-    memcpy(s->sentPackets[numPacketsInWindow]->packet, packet, HEADER_SIZE + bytesReceived);
-    s->sentPackets[numPacketsInWindow]->sentTime = getCurrentTime();
-
     s->LAST_PACKET_SENT++;
+    fprintf(stderr, "Sent sequence number: %d\n", ntohl(packet->seqno));
     conn_sendpkt(s->c, packet, HEADER_SIZE + bytesReceived);
+
+    // Save packet until it's acked/in case it needs to be retransmitted
+    int slot = s->LAST_PACKET_SENT - s->LAST_PACKET_ACKED - 1;
+    // fprintf(stderr, "Slot: %d\n", slot);
+    memcpy(s->sentPackets[slot]->packet, packet, HEADER_SIZE + bytesReceived);
+    s->sentPackets[slot]->sentTime = getCurrentTime();
+    s->sentPackets[slot]->acked = 1;
+
+    fprintf(stderr, "%s\n", "====================SENDING PACKET================");
+    // fprintf(stderr, "Packet data: %s\n", packet->data);
+
     free(packet);
   }
 }
@@ -419,15 +469,48 @@ void
 rel_output (rel_t *r)
 {
   printf("rel_output\n");
-  // TODO: Support window sizes greater than 1
-  packet_t *pkt = r->recvPackets[0]->packet;
-  uint16_t packet_len = ntohs(pkt->len);
-  size_t len = conn_bufspace(r->c);
-  // TODO: Use conn_bufspace to check if the output buffer is large enough for the received data
+  int numPacketsInWindow = r->LAST_PACKET_SENT - r->LAST_PACKET_ACKED;
+  int i;
+  fprintf(stderr, "lastpacksent: %d, lackPackacked: %d\n", r->LAST_PACKET_SENT, r->LAST_PACKET_ACKED);
+  for (i = 0; i < r->windowSize; i++) {
+    fprintf(stderr, "Recvpacket of %d has ack %d\n", i, r->recvPackets[i]->acked);
+    if(r->recvPackets[i]->acked == 0) {
+      break;
+    }
+    packet_t *pkt = r->recvPackets[i]->packet;
+    uint16_t packet_len = ntohs(pkt->len);
+    size_t len = conn_bufspace(r->c);
 
-  if (len >= packet_len - HEADER_SIZE) {
-    conn_output(r->c, pkt->data, packet_len - HEADER_SIZE);
-  }  
+    if(len >= packet_len - HEADER_SIZE) {
+      if(packet_len == HEADER_SIZE) {
+        r->eofRecv = 1;
+      }
+      fprintf(stderr, "Outputting packet %d from recvPackets \n", i);
+      conn_output(r->c, pkt->data, packet_len - HEADER_SIZE);
+      r->recvPackets[i]->acked = 0;
+    } 
+    else {
+      break;
+    }
+  }
+
+  fprintf(stderr, "value of i: %d\n", i);
+  fprintf(stderr, "Next Packet Expected Before: %d\n", r->NEXT_PACKET_EXPECTED );
+
+  r->NEXT_PACKET_EXPECTED += i;
+  struct ack_packet *ack = createAckPacket(r, r->NEXT_PACKET_EXPECTED);
+
+  fprintf(stderr, "Next Packet Expected: %d\n", r->NEXT_PACKET_EXPECTED);
+
+  conn_sendpkt(r->c, (packet_t *)ack, ACK_PACKET_SIZE);
+  free(ack);
+
+
+  if(numPacketsInWindow == 0 && r->eofRecv == 1 && r->eofSent == 1) {
+    rel_destroy(r);
+    return;
+  }
+  shiftRecvPacketList(r);
 }
 
 void

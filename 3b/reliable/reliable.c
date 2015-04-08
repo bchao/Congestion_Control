@@ -15,6 +15,26 @@
 
 #include "rlib.h"
 
+/* CLIENT STATES */
+#define CLIENT_WAITING_DATA 0
+#define CLIENT_WAITING_ACK 1
+#define CLIENT_WAITING_EOF_ACK 2
+#define CLIENT_DONE 3
+
+/* SERVER STATES */
+#define SERVER_WAITING_DATA 0
+#define SERVER_WAITING_FLUSH 1
+#define SERVER_DONE 2
+
+#define MAX_PAYLOAD_SIZE 500
+#define HEADER_SIZE 12
+#define ACK_PACKET_SIZE 8
+
+
+typedef struct packetWrapper {
+  packet_t *packet;
+  uint32_t sentTime;
+} wrapper;
 
 
 struct reliable_state {
@@ -43,12 +63,81 @@ struct reliable_state {
 
   /* Server */
   int server_state;
+
+
+  int w;
+
+  int LAST_ACK_RECVD;
+  int LAST_ACK_COUNT;
+
+  // int eofToSender;
 };
 rel_t *rel_list;
 
+void
+movePacketToTail (int position, rel_t *r, wrapper *curPacketNode) {
+  int numPacketsInWindow = r->LAST_PACKET_SENT - r->LAST_PACKET_ACKED;
+  int i;
+  for (i = position; i < numPacketsInWindow - 1; i++) {
+    r->sentPackets[i] = r->sentPackets[i+1];
+  }
+  r->sentPackets[numPacketsInWindow - 1] = curPacketNode;
+  return;
+}
 
+int
+verifyChecksum (rel_t *r, packet_t *pkt, size_t n) {
+  uint16_t checksum = pkt->cksum;
+  uint16_t len = ntohs(pkt->len);
 
+  pkt->cksum = 0;
+  if ((len > HEADER_SIZE + MAX_PAYLOAD_SIZE) || (cksum(pkt, len) != checksum)) {
+    pkt->cksum = checksum;
+    return 0;
+  }
+  pkt->cksum = checksum;
+  return 1;
+}
 
+struct ack_packet *
+createAckPacket (rel_t *r, uint32_t ackno) {
+  struct ack_packet *ack;
+  ack = malloc(sizeof(*ack));
+
+  ack->cksum = 0;
+  ack->len = htons(ACK_PACKET_SIZE);
+  ack->ackno = htonl(ackno);
+  ack->cksum = cksum(ack, ACK_PACKET_SIZE);
+  return ack;
+}
+
+uint32_t
+getCurrentTime () { // Returns time in ms since epoch
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  uint32_t ms = (tv.tv_sec * 1000) + (tv.tv_usec / 1000);
+  return ms;
+}
+
+void
+retransmitPacket (wrapper *pW) {
+  return;
+}
+
+packet_t *
+createDataPacket (rel_t *r, char *payload, int bytesReceived) {
+  packet_t *packet;
+  packet = malloc(sizeof(*packet));
+
+  memcpy(packet->data, payload, bytesReceived);
+  packet->cksum = 0;
+  packet->len = htons(HEADER_SIZE + bytesReceived);
+  packet->ackno = htonl(r->NEXT_PACKET_EXPECTED);
+  packet->seqno = htonl(r->LAST_PACKET_SENT + 1);
+  packet->cksum = cksum(packet, HEADER_SIZE + bytesReceived);
+
+  return packet;
+}
 
 /* Creates a new reliable protocol session, returns NULL on failure.
  * Exactly one of c and ss should be NULL.  (ss is NULL when called
@@ -58,6 +147,7 @@ rel_t *
 rel_create (conn_t *c, const struct sockaddr_storage *ss,
 	    const struct config_common *cc)
 {
+  printf("rel_create\n");
   rel_t *r;
 
   r = xmalloc (sizeof (*r));
@@ -71,7 +161,11 @@ rel_create (conn_t *c, const struct sockaddr_storage *ss,
     }
   }
 
-  r->c = c;  
+  r->c = c;
+  // r->next = rel_list;
+  // r->prev = &rel_list;
+  // if (rel_list)
+  //   rel_list->prev = &r->next;
   rel_list = r;
 
   /* Do any other initialization you need here */
@@ -100,12 +194,16 @@ rel_create (conn_t *c, const struct sockaddr_storage *ss,
   r->eofSent = 0;
   r->eofRecv = 0;
 
+  // initialize w to 1?
+  r->w = 1;
+
   return r;
 }
 
 void
 rel_destroy (rel_t *r)
 {
+  printf("rel_destroy\n");
   conn_destroy (r->c);
 
   /* Free any other allocated memory here */
@@ -118,7 +216,7 @@ rel_destroy (rel_t *r)
   }
   free(r->sentPackets);
   free(r->recvPackets);
-  free(r);  
+  free(r);
 }
 
 
@@ -131,8 +229,30 @@ rel_demux (const struct config_common *cc,
 }
 
 void
+shiftPacketList (rel_t *r, packet_t *pkt) {
+  int i, shift = 0;
+  int numPacketsInWindow = r->LAST_PACKET_SENT - r->LAST_PACKET_ACKED;
+  for (i = 0; i < numPacketsInWindow; i++) {
+    if (pkt->ackno == r->sentPackets[i]->packet->seqno + 1) {
+      shift = 1;
+    }
+    if (shift) {
+      r->sentPackets[i] = r->sentPackets[i + 1];
+    }
+  }
+  // reset values?
+  free(r->sentPackets[numPacketsInWindow]->packet);
+  free(r->sentPackets[numPacketsInWindow]);
+  r->sentPackets[numPacketsInWindow] = malloc(sizeof(wrapper));
+  r->sentPackets[numPacketsInWindow]->packet = malloc(sizeof(packet_t));
+
+  return;
+}
+
+void
 rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
+  printf("rel_recvpkt\n");
   uint16_t len = ntohs(pkt->len);
   uint32_t ackno = ntohl(pkt->ackno);
 
@@ -142,8 +262,7 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
   }
 
   if (len == ACK_PACKET_SIZE) { // ack packet
-
-    if (ackno <= r->LAST_PACKET_ACKED) { //duplicate ack
+    if (ackno <= r->LAST_PACKET_ACKED + 1) { //duplicate ack
       return;
     }
     // ack packet
@@ -162,10 +281,9 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
   }
   else if (len == HEADER_SIZE) { // eof condition, destroy??
     // signal to destroy? send eof?
-
     uint32_t seqno = ntohl(pkt->seqno);
     if (seqno == r->NEXT_PACKET_EXPECTED) {
-      struct ack_packet *ack = createAckPacket(r);
+      struct ack_packet *ack = createAckPacket(r, r->NEXT_PACKET_EXPECTED + 1);
 
       conn_sendpkt(r->c, (packet_t *)ack, ACK_PACKET_SIZE);
       conn_output(r->c, pkt->data, len - HEADER_SIZE);
@@ -177,10 +295,12 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
   else { // data packet
     uint32_t seqno = ntohl(pkt->seqno);
 
-    if (seqno < r->NEXT_PACKET_EXPECTED - 1) { // duplicate packet
-      return;
-    }
-    if (seqno - r->NEXT_PACKET_EXPECTED > r->windowSize) { // packet outside window
+    // if (seqno - r->NEXT_PACKET_EXPECTED > r->windowSize) { // packet outside window
+    //   return;
+    // }
+    if (seqno < r->NEXT_PACKET_EXPECTED) { // duplicate packet
+      struct ack_packet *ack = createAckPacket(r, r->NEXT_PACKET_EXPECTED);
+      conn_sendpkt(r->c, (packet_t *)ack, ACK_PACKET_SIZE);
       return;
     }
     // holds data that arrives out of order and data that is in correct order, but app hasn't read yet
@@ -189,7 +309,7 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 
     // size_t availableLength = conn_bufspace(r->c);
     if (seqno == r->NEXT_PACKET_EXPECTED) {
-      struct ack_packet *ack = createAckPacket(r);
+      struct ack_packet *ack = createAckPacket(r, r->NEXT_PACKET_EXPECTED + 1);
 
       conn_sendpkt(r->c, (packet_t *)ack, ACK_PACKET_SIZE);
       conn_output(r->c, pkt->data, len - HEADER_SIZE);
@@ -204,7 +324,7 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
       // memcpy(r->recvPackets[slot]->packet, pkt, sizeof(packet_t));
       // r->recvPackets[slot]->sentTime = getCurrentTime();
     }
-  }  
+  }
 }
 
 /*
@@ -222,8 +342,28 @@ same as that is described above in 3a.
 void
 rel_read (rel_t *s)
 {
+  printf("rel_read\n");
   if(s->c->sender_receiver == RECEIVER)
   {
+    // if already sent eof to the sender/not first call
+    if(s->eofSent) {
+      return;
+    }
+    else {
+      // first call
+      // set eofSent to 1
+      s->eofSent = 1;
+
+      // send eof
+
+      char payloadBuffer[MAX_PAYLOAD_SIZE];
+
+      int bytesReceived = 0;
+
+      packet_t *packet = createDataPacket(s, payloadBuffer, bytesReceived);
+      conn_sendpkt(s->c, packet, HEADER_SIZE + bytesReceived);
+      free(packet);
+    }
     //if already sent EOF to the sender
     //  return;
     //else
@@ -231,6 +371,7 @@ rel_read (rel_t *s)
   }
   else //run in the sender mode
   {
+    //same logic as lab 1
     int numPacketsInWindow = s->LAST_PACKET_SENT - s->LAST_PACKET_ACKED;
     if (numPacketsInWindow >= s->windowSize || s->eofSent) {
       // don't send, window's full, waiting for acks
@@ -244,7 +385,6 @@ rel_read (rel_t *s)
 
     // can send packet
     char payloadBuffer[MAX_PAYLOAD_SIZE];
-
 
     int bytesReceived = conn_input(s->c, payloadBuffer, MAX_PAYLOAD_SIZE);
     if (bytesReceived == 0) {
@@ -265,7 +405,6 @@ rel_read (rel_t *s)
     // TODO: Need to handle overflow bytes here as well
 
     packet_t *packet = createDataPacket(s, payloadBuffer, bytesReceived);
-
     // Save packet until it's acked/in case it needs to be retransmitted
     memcpy(s->sentPackets[numPacketsInWindow]->packet, packet, HEADER_SIZE + bytesReceived);
     s->sentPackets[numPacketsInWindow]->sentTime = getCurrentTime();
@@ -279,11 +418,43 @@ rel_read (rel_t *s)
 void
 rel_output (rel_t *r)
 {
+  printf("rel_output\n");
+  // TODO: Support window sizes greater than 1
+  packet_t *pkt = r->recvPackets[0]->packet;
+  uint16_t packet_len = ntohs(pkt->len);
+  size_t len = conn_bufspace(r->c);
+  // TODO: Use conn_bufspace to check if the output buffer is large enough for the received data
+
+  if (len >= packet_len - HEADER_SIZE) {
+    conn_output(r->c, pkt->data, packet_len - HEADER_SIZE);
+  }  
 }
 
 void
 rel_timer ()
 {
   /* Retransmit any packets that need to be retransmitted */
+  // check timeout
+  // check acks...3 of same? congestion control
 
+  /* Retransmit any packets that need to be retransmitted */
+  // rel_t *r = rel_list;
+  // uint32_t curTime = getCurrentTime();
+  
+  // while (r != NULL) {
+  //   int numPacketsInWindow = r->LAST_PACKET_SENT - r->LAST_PACKET_ACKED;
+  //   int i;
+  //   for (i = 0; i < numPacketsInWindow; i++) {
+  //     wrapper *curPacketNode = r->sentPackets[i];
+  //     if (curTime - curPacketNode->sentTime > r->timeout) {
+  //       curPacketNode->sentTime = curTime;
+  //       // retransmit package
+  //       // retransmitPacket(r->sentPackets[i]);
+  //       // Move original packet to the end of sentPackets, why do we need this again??
+  //       movePacketToTail(i, r, curPacketNode);
+  //       conn_sendpkt(r->c, curPacketNode->packet, ntohs(curPacketNode->packet->len));
+  //     }
+  //   }
+  //   r = r->next;
+  // }
 }

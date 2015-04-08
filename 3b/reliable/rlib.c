@@ -477,7 +477,8 @@ need_timer_in (const struct timespec *last, long timer)
 void
 conn_poll (const struct config_common *cc)
 {
-  int n, i;
+  // int n, i;
+  int i;
   conn_t *c, *nc;
   static int last_cg;
 
@@ -486,10 +487,14 @@ conn_poll (const struct config_common *cc)
     cevents_generation = last_cg;
   }
 
-  if (cevents[0].fd >= 0)
-    n = poll (cevents, ncevents, need_timer_in (&last_timeout, cc->timer));
-  else
-    n = poll (cevents+1, ncevents-1, need_timer_in (&last_timeout, cc->timer));
+  if (cevents[0].fd >= 0){
+    // n = poll (cevents, ncevents, need_timer_in (&last_timeout, cc->timer));
+    poll (cevents, ncevents, need_timer_in (&last_timeout, cc->timer));
+  }
+  else{
+    // n = poll (cevents+1, ncevents-1, need_timer_in (&last_timeout, cc->timer));
+    poll (cevents+1, ncevents-1, need_timer_in (&last_timeout, cc->timer));
+  }
 
   for (i = 1; i < ncevents; i++) {
     if (cevents[i].revents & (POLLIN|POLLERR|POLLHUP)) {

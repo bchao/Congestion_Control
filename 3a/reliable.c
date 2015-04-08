@@ -172,7 +172,7 @@ rel_create (conn_t *c, const struct sockaddr_storage *ss,
 
   int i;
   for (i = 0; i < r->windowSize; i++) {
-    r->sentPackets[i] = malloc(sizeof(wrapper *));
+    r->sentPackets[i] = malloc(sizeof(wrapper));
     r->sentPackets[i]->packet = malloc(sizeof(packet_t));
     r->recvPackets[i] = malloc(sizeof(wrapper));
     r->recvPackets[i]->packet = malloc(sizeof(packet_t));
@@ -242,7 +242,7 @@ shiftPacketList (rel_t *r, packet_t *pkt) {
   // reset values?
   free(r->sentPackets[numPacketsInWindow]->packet);
   free(r->sentPackets[numPacketsInWindow]);
-  r->sentPackets[numPacketsInWindow] = malloc(sizeof(wrapper *));
+  r->sentPackets[numPacketsInWindow] = malloc(sizeof(wrapper));
   r->sentPackets[numPacketsInWindow]->packet = malloc(sizeof(packet_t));
 
   return;
@@ -292,7 +292,7 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
       // rel_destroy(r);
     } 
   }
-  else {
+  else { // data packet
     uint32_t seqno = ntohl(pkt->seqno);
 
     if (seqno < r->NEXT_PACKET_EXPECTED - 1) { // duplicate packet
@@ -329,8 +329,8 @@ void
 rel_read (rel_t *s)
 {
   int numPacketsInWindow = s->LAST_PACKET_SENT - s->LAST_PACKET_ACKED;
-  if (numPacketsInWindow >= s->windowSize) {
-    // don't send, window's full
+  if (numPacketsInWindow >= s->windowSize || s->eofSent) {
+    // don't send, window's full, waiting for acks
     return;
   }
 
@@ -338,25 +338,33 @@ rel_read (rel_t *s)
     rel_destroy(s);
     return;
   }
+
   // can send packet
   char payloadBuffer[MAX_PAYLOAD_SIZE];
+
 
   int bytesReceived = conn_input(s->c, payloadBuffer, MAX_PAYLOAD_SIZE);
   if (bytesReceived == 0) {
     return; // no data is available at the moment, just return
   }
-  else if (bytesReceived == -1) {
+  else if (bytesReceived == -1) { // eof or error
     s->eofSent = 1;
     bytesReceived = 0;
+
+    // Why do we need to create and send a packet here?
+
     packet_t *packet = createDataPacket(s, payloadBuffer, bytesReceived);
     conn_sendpkt(s->c, packet, HEADER_SIZE + bytesReceived);
     free(packet);
     return;
   }
+
+  // TODO: Need to handle overflow bytes here as well
+
   packet_t *packet = createDataPacket(s, payloadBuffer, bytesReceived);
 
   // Save packet until it's acked/in case it needs to be retransmitted
-  memcpy(s->sentPackets[numPacketsInWindow]->packet, &packet, HEADER_SIZE + bytesReceived);
+  memcpy(s->sentPackets[numPacketsInWindow]->packet, packet, HEADER_SIZE + bytesReceived);
   s->sentPackets[numPacketsInWindow]->sentTime = getCurrentTime();
 
   s->LAST_PACKET_SENT++;
@@ -395,10 +403,10 @@ rel_timer ()
         // retransmit package
         // retransmitPacket(r->sentPackets[i]);
         printf("RETRANSMITTING\n");
-        // Move original packet to the end of sentPackets
+        // Move original packet to the end of sentPackets, why do we need this again??
         movePacketToTail(i, r, curPacketNode);
         conn_sendpkt(r->c, curPacketNode->packet, ntohs(curPacketNode->packet->len));
-        fprintf(stderr, "numpackets: %d retransmitted packet: %s\n", numPacketsInWindow, curPacketNode->packet->data);
+        // fprintf(stderr, "numpackets: %d retransmitted packet: %s\n", numPacketsInWindow, curPacketNode->packet->data);
       }
     }
     r = r->next;

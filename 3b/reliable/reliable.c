@@ -349,7 +349,7 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
       // fprintf(stderr, "window size: %d\n", r->windowSize);
       if (r->windowSize * 2 > r->ssThresh) {
         // START AIMD
-        return;
+        // return;
       } else {
         r->windowSize = r->windowSize * 2;
       }
